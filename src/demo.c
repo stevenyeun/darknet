@@ -20,6 +20,7 @@
 #include "http_stream.h"
 
 #if 1 Tracking 관련 변수
+
 static int trackingOnOff = 0;
 static int init_left = 0, init_right = 0, init_top = 0, init_bottom = 0;
 static int trackingStatus = 0;
