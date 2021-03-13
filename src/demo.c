@@ -19,6 +19,11 @@
 
 #include "http_stream.h"
 
+#if 1 Tracking 관련 변수
+static int trackingOnOff = 0;
+static int init_left = 0, init_right = 0, init_top = 0, init_bottom = 0;
+static int trackingStatus = 0;
+#endif
 static char **demo_names;
 static image **demo_alphabet;
 static int demo_classes;
@@ -27,7 +32,7 @@ static int nboxes = 0;
 static detection *dets = NULL;
 
 static network net;
-static image in_s ;
+static image in_s ;//리사이즈된 이미지 저장
 static image det_s;
 
 static cap_cv *cap;
@@ -42,7 +47,7 @@ static int avg_frames;
 static int demo_index = 0;
 static mat_cv** cv_images;
 
-mat_cv* in_img;
+mat_cv* in_img;//원본이미지
 mat_cv* det_img;
 mat_cv* show_img;
 
@@ -52,8 +57,10 @@ static int letter_box = 0;
 static const int thread_wait_ms = 1;
 static volatile int run_fetch_in_thread = 0;
 static volatile int run_detect_in_thread = 0;
+static volatile int run_tracking_in_thread = 0;
 
 
+//영상 읽기 스레드
 void *fetch_in_thread(void *ptr)
 {
     while (!custom_atomic_load_int(&flag_exit)) {
@@ -65,7 +72,13 @@ void *fetch_in_thread(void *ptr)
         if (letter_box)
             in_s = get_image_from_stream_letterbox(cap, net.w, net.h, net.c, &in_img, dont_close_stream);
         else
+        {
+            //영상을 읽어서 리사이즈 한다.
+            //.cfg 파일에 있는 width height 로 리사이즈
+            //in_img 원본이미지
+            //in_s 리사이즈된 이미지
             in_s = get_image_from_stream_resize(cap, net.w, net.h, net.c, &in_img, dont_close_stream);
+        }
         if (!in_s.data) {
             printf("Stream closed.\n");
             custom_atomic_store_int(&flag_exit, 1);
@@ -97,7 +110,13 @@ void *detect_in_thread(void *ptr)
 
         layer l = net.layers[net.n - 1];
         float *X = det_s.data;
-        float *prediction = network_predict(net, X);
+
+        //시간측정 위한 코드
+        double time = what_time_is_it_now();//
+        //
+
+        float *prediction = network_predict(net, X);//디텍션 함수??
+        printf("Predicted in %f seconds.\n", what_time_is_it_now() - time);
 
         cv_images[demo_index] = det_img;
         det_img = cv_images[(demo_index + avg_frames / 2 + 1) % avg_frames];
@@ -115,6 +134,65 @@ void *detect_in_thread(void *ptr)
         //}
 
         custom_atomic_store_int(&run_detect_in_thread, 0);
+    }
+
+    return 0;
+}
+
+//21.03.13 Tracking Thread 함수 추가
+void *tracking_in_thread(void *ptr)
+{
+    int isInit = 0;
+    while (!custom_atomic_load_int(&flag_exit)) {
+        while (!custom_atomic_load_int(&run_tracking_in_thread)) {
+            if (custom_atomic_load_int(&flag_exit)) return 0;
+            this_thread_yield();
+        }
+
+        if (trackingOnOff == 1)
+        {
+            //시간측정 위한 코드
+            double time = what_time_is_it_now();//
+            //
+
+            switch (trackingStatus)
+            {
+            case 1:
+            {
+                BOOL ret = init_tracker(det_s, init_left, init_right, init_top, init_bottom);
+
+                if (ret == TRUE)
+                {
+                    trackingStatus = 2;
+                }
+                else
+                {
+                    trackingStatus = 0;
+                }
+            }
+            break;
+            case 2:
+            {
+                int  left = 0, right = 0, top = 0, bottom = 0;
+                BOOL ret = update_tracking_info(det_s, &left, &right, &top, &bottom);
+
+                if (ret == TRUE)
+                {
+                    trackingStatus = 2;
+                }
+                else
+                {
+                    trackingStatus = 0;
+                }
+            }
+            break;
+            default:
+                break;
+            }
+
+            printf("tracking process time %f seconds.\n", what_time_is_it_now() - time);
+        }
+        custom_atomic_store_int(&run_tracking_in_thread, 0);
     }
 
     return 0;
@@ -203,8 +281,10 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
     custom_thread_t fetch_thread = NULL;
     custom_thread_t detect_thread = NULL;
+    custom_thread_t tracking_thread = NULL;
     if (custom_create_thread(&fetch_thread, 0, fetch_in_thread, 0)) error("Thread creation failed");
     if (custom_create_thread(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
+    if (custom_create_thread(&tracking_thread, 0, tracking_in_thread, 0)) error("Thread creation failed");
 
     fetch_in_thread_sync(0); //fetch_in_thread(0);
     det_img = in_img;
@@ -265,7 +345,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
             if (!benchmark) custom_atomic_store_int(&run_fetch_in_thread, 1); // if (custom_create_thread(&fetch_thread, 0, fetch_in_thread, 0)) error("Thread creation failed");
             custom_atomic_store_int(&run_detect_in_thread, 1); // if (custom_create_thread(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
-
+            custom_atomic_store_int(&run_tracking_in_thread, 1);
             //if (nms) do_nms_obj(local_dets, local_nboxes, l.classes, nms);    // bad results
             if (nms) {
                 if (l.nms_kind == DEFAULT_NMS) do_nms_sort(local_dets, local_nboxes, l.classes, nms);
@@ -296,7 +376,10 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
                 }
             }
 
-            if (!benchmark && !dontdraw_bbox) draw_detections_cv_v3(show_img, local_dets, local_nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes, demo_ext_output);
+            if (!benchmark && !dontdraw_bbox)
+            {
+                draw_detections_cv_v3(show_img, local_dets, local_nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes, demo_ext_output);
+            }
             free_detections(local_dets, local_nboxes);
 
             printf("\nFPS:%.1f \t AVG_FPS:%.1f\n", fps, avg_fps);

@@ -117,6 +117,17 @@ void show_acnhors(int number_of_boxes, int num_of_clusters, float *rel_width_hei
 
 void show_opencv_info();
 
+
+#if 1//210313 opencv 이용 Tracking
+
+//트랙커 초기화
+int init_tracker(image frame, int left, int right, int top, int bottom);
+
+//트랙킹 정보 업데이트
+int update_tracking_info(image frame, int * left, int * right, int * top, int * bottom);
+
+#endif
+
 #else   // OPENCV
 
 void show_opencv_info();

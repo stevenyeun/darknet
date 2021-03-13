@@ -20,6 +20,8 @@
 #include "stb_image_write.h"
 #endif
 
+#include <Windows.h>
+
 extern int check_mistakes;
 //int windows = 0;
 
@@ -266,17 +268,37 @@ void draw_bbox(image a, box bbox, int w, float r, float g, float b)
 
 image **load_alphabet()
 {
+    // 실행파일 경로
+    char programpath[_MAX_PATH];
+    GetModuleFileName(NULL, programpath, _MAX_PATH);
+    
+    CHAR drive[_MAX_DRIVE] = { 0, };
+    char dir[_MAX_DIR] = { 0, };
+    char fname[_MAX_FNAME] = { 0, };
+    char ext[_MAX_EXT] = { 0, };
+    _splitpath(programpath, drive, dir, fname, ext);
+
+    //printf("%s%sdata\\labels\\", drive, dir);    
     int i, j;
     const int nsize = 8;
     image** alphabets = (image**)xcalloc(nsize, sizeof(image*));
     for(j = 0; j < nsize; ++j){
+
+        //printf("alphabets[%d] xcalloc \r\n", j);
         alphabets[j] = (image*)xcalloc(128, sizeof(image));
         for(i = 32; i < 127; ++i){
             char buff[256];
-            sprintf(buff, "data/labels/%d_%d.png", i, j);
+            sprintf(buff, "%s%sdata\\labels\\%d_%d.png", drive, dir, i, j);
+
+            //printf("start load_image_color %s%sdata\\labels\\%d_%d.png \r\n", drive, dir, i, j);
             alphabets[j][i] = load_image_color(buff, 0, 0);
+            //printf("end load_image_color %s%sdata\\labels\\%d_%d.png \r\n", drive, dir, i, j);            
         }
+        /*printf("Sleep(500) \r\n");
+        Sleep(500);*/
     }
+
+    //printf("load_alphabet return \r\n");
     return alphabets;
 }
 
@@ -1534,7 +1556,7 @@ image load_image_stb_resize(char *filename, int w, int h, int c)
 }
 
 image load_image(char *filename, int w, int h, int c)
-{
+{    
 #ifdef OPENCV
     //image out = load_image_stb(filename, c);
     image out = load_image_cv(filename, c);

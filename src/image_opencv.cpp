@@ -21,6 +21,8 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/video/video.hpp>
 
+#include <opencv2/tracking.hpp>//opencv tracknig 사용을 위해 추가 
+
 // includes for OpenCV >= 3.x
 #ifndef CV_VERSION_EPOCH
 #include <opencv2/core/types.hpp>
@@ -53,6 +55,7 @@ using std::endl;
 #define OPENCV_VERSION CVAUX_STR(CV_VERSION_MAJOR)"" CVAUX_STR(CV_VERSION_MINOR)"" CVAUX_STR(CV_VERSION_REVISION) OCV_D
 #ifndef USE_CMAKE_LIBS
 #pragma comment(lib, "opencv_world" OPENCV_VERSION ".lib")
+#pragma comment(lib, "opencv_tracking" OPENCV_VERSION ".lib")
 #endif    // USE_CMAKE_LIBS
 #else   // CV_VERSION_EPOCH
 #define OPENCV_VERSION CVAUX_STR(CV_VERSION_EPOCH)"" CVAUX_STR(CV_VERSION_MAJOR)"" CVAUX_STR(CV_VERSION_MINOR) OCV_D
@@ -783,13 +786,13 @@ extern "C" image get_image_from_stream_resize(cap_cv *cap, int w, int h, int c, 
         printf("Video stream: %d x %d \n", src->cols, src->rows);
     }
     else
-        src = (cv::Mat*)get_capture_frame_cv(cap);
+        src = (cv::Mat*)get_capture_frame_cv(cap);//프레임 읽어옴
 
     if (!wait_for_stream(cap, src, dont_close)) return make_empty_image(0, 0, 0);
 
     *(cv::Mat **)in_img = src;
 
-    cv::Mat new_img = cv::Mat(h, w, CV_8UC(c));
+    cv::Mat new_img = cv::Mat(h, w, CV_8UC(c));//읽어온 이미지를 리사이즈 한다..
     cv::resize(*src, new_img, new_img.size(), 0, 0, cv::INTER_LINEAR);
     if (c>1) cv::cvtColor(new_img, new_img, cv::COLOR_RGB2BGR);
     image im = mat_to_image(new_img);
@@ -1534,6 +1537,78 @@ void show_opencv_info()
         << std::endl;
 }
 
+
+
+int init_tracker(image frame, int left, int right, int top, int bottom)
+{
+    // List of tracker types in OpenCV 3.4.1
+    std::string trackerTypes[8] = { "BOOSTING", "MIL", "KCF", "TLD","MEDIANFLOW", "GOTURN", "MOSSE", "CSRT" };
+    // vector <string> trackerTypes(types, std::end(types));
+
+    // Create a tracker
+    std::string trackerType = trackerTypes[3];
+    printf("trackerType : %s \r\n", trackerType);
+    cv::Ptr<cv::Tracker> tracker;
+
+#if (CV_MINOR_VERSION < 3)
+    {
+        tracker = Tracker::create(trackerType);
+    }
+#else
+    {
+        if (trackerType == "BOOSTING")
+            tracker = cv::TrackerBoosting::create();
+        if (trackerType == "MIL")
+            tracker = cv::TrackerMIL::create();
+        if (trackerType == "KCF")
+            tracker = cv::TrackerKCF::create();
+        if (trackerType == "TLD")
+            tracker = cv::TrackerTLD::create();
+        if (trackerType == "MEDIANFLOW")
+            tracker = cv::TrackerMedianFlow::create();
+        if (trackerType == "GOTURN")
+            tracker = cv::TrackerGOTURN::create();
+        if (trackerType == "MOSSE")
+            tracker = cv::TrackerMOSSE::create();
+        if (trackerType == "CSRT")
+            tracker = cv::TrackerCSRT::create();
+    }
+#endif
+
+    // Define initial bounding box
+    //좌표 변환
+    int x = (right - left) / 2;
+    int y = (bottom - top) / 2;
+    int width = (right - left);
+    int height = (bottom - top);
+
+    cv::Rect2d bbox(x, y, width, height);
+    cv::Mat temp = image_to_mat(frame);
+
+    bool ret = tracker->init(temp, bbox);
+
+    if (ret == true)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+int update_tracking_info(image frame, int * left, int * right, int * top, int * bottom)
+{
+    bool ret = false;
+    if (ret == true)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
 
 
 }   // extern "C"
