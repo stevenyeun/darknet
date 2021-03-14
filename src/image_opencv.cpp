@@ -1539,6 +1539,7 @@ void show_opencv_info()
 
 
 
+cv::Ptr<cv::Tracker> tracker;//opencv Tracker
 int init_tracker(image frame, int left, int right, int top, int bottom)
 {
     // List of tracker types in OpenCV 3.4.1
@@ -1547,8 +1548,7 @@ int init_tracker(image frame, int left, int right, int top, int bottom)
 
     // Create a tracker
     std::string trackerType = trackerTypes[3];
-    printf("trackerType : %s \r\n", trackerType);
-    cv::Ptr<cv::Tracker> tracker;
+    printf("trackerType : %s \r\n", trackerType);    
 
 #if (CV_MINOR_VERSION < 3)
     {
@@ -1600,8 +1600,19 @@ int init_tracker(image frame, int left, int right, int top, int bottom)
 int update_tracking_info(image frame, int * left, int * right, int * top, int * bottom)
 {
     bool ret = false;
+
+    cv::Mat temp = image_to_mat(frame);
+    cv::Rect2d bbox;
+    ret = tracker->init(temp, bbox);
+
     if (ret == true)
     {
+        *left = bbox.x - (bbox.width / 2);
+        *right = bbox.x + (bbox.width / 2);
+
+        *top = bbox.x - (bbox.height / 2);
+        *bottom = bbox.x + (bbox.height / 2);
+
         return 1;
     }
     else

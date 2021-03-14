@@ -1,6 +1,7 @@
 #pragma once
 
 
+
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <WinSock2.h>
@@ -20,6 +21,13 @@ public:
 		int hostPort,//패킷을 수신 할 멀티 캐스트 그룹의 포트
 		string socketName//소켓 이름(디버그 출력용)
 	);
+
+    string GetSocketName()
+    {
+        return m_socketName;
+    }
+    string MakeInterfaceFormat(int group, int left, int right, int top, int bottom, int videoWidth, int videoHeight, int status);
+    void ParseInterfaceFormat(string packet, int & groupNum, int & left, int & right, int & top, int & bottom, int & videoWidth, int & videoHeight, int & status);
 private:
 	std::string m_socketName;
 #endif
@@ -31,6 +39,8 @@ private:
 	std::string m_strDestAddr;
 	int m_nDestPort;
 	std::queue<std::string> m_senderQueue;
+    HANDLE m_hSenderThread;        // Window Thread Handle
+    DWORD  m_nSenderThreadID;      // Window Thread ID
 	//CRITICAL_SECTION m_cs;
 public:
 	void SetSendData(std::string strData) {
@@ -38,6 +48,13 @@ public:
 		m_senderQueue.push(strData);
 		//LeaveCriticalSection(&m_cs);
 	}
+
+    BOOL IsSendData() {
+        if (m_senderQueue.size() > 0)
+            return TRUE;
+        else
+            return FALSE;
+    }
 	std::string PopSendData()
 	{
 		//EnterCriticalSection(&m_cs);
@@ -60,9 +77,11 @@ public:
 #if 1//Receiver
 private:
 	SOCKET m_recverSock;
-	std::string m_strRecvAddr;
-	int m_nRecvPort;
+	std::string m_strHostAddr;
+	int m_nHostPort;
 	std::queue<std::string> m_recverQueue;
+    HANDLE m_hRecverThread;        // Window Thread Handle
+    DWORD  m_nRecverThreadID;      // Window Thread ID
 	//CRITICAL_SECTION m_cs;
 public:
 	void SetRecvData(std::string strData) {
@@ -70,6 +89,12 @@ public:
 		m_recverQueue.push(strData);
 		//LeaveCriticalSection(&m_cs);
 	}
+    BOOL IsRecvData() {
+        if (m_recverQueue.size() > 0)
+            return TRUE;
+        else
+            return FALSE;
+    }
 	std::string PopRecvData()
 	{
 		//EnterCriticalSection(&m_cs);
@@ -81,11 +106,11 @@ public:
 	SOCKET GetRecverSocket() {
 		return m_recverSock;
 	}
-	std::string GetRecvAddr() {
-		return m_strRecvAddr;
+	std::string GetHostAddr() {
+		return m_strHostAddr;
 	}
-	int GetRecvPort() {
-		return m_nRecvPort;
+	int GetHostPort() {
+		return m_nHostPort;
 	}
 #endif
 

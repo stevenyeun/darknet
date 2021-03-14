@@ -8,6 +8,8 @@
 #include "image.h"
 #include "demo.h"
 #include "darknet.h"
+
+
 #ifdef WIN32
 #include <time.h>
 #include "gettimeofday.h"
@@ -21,9 +23,23 @@
 
 #if 1 Tracking 관련 변수
 
-static int trackingOnOff = 0;
+#include "CTrackingInterfaceUdpSocket.h"
+
+static int g_groupNum = 1;
+static BOOL g_trackingOnOff = TRUE;
 static int init_left = 0, init_right = 0, init_top = 0, init_bottom = 0;
-static int trackingStatus = 0;
+
+enum TRACKING_STATUS
+{
+    TRACKING_IDLE = 0,
+    TRACKING_START = 1,
+    TRACKING_ING = 2,
+    TRACKING_FAILURE = 3,
+    TRACKING_CANCEL = 4,
+};
+static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
+
+static CTrackingInterfaceUdpSocket g_trackingInterfaceUdpSocket;
 #endif
 static char **demo_names;
 static image **demo_alphabet;
@@ -144,54 +160,95 @@ void *detect_in_thread(void *ptr)
 void *tracking_in_thread(void *ptr)
 {
     int isInit = 0;
+    int width = 0;
+    int height = 0;
+    int left = 0, right = 0, top = 0, bottom = 0;
+    int recvWidth = 0, recvHeight = 0;
+    int groupNum = 0;
     while (!custom_atomic_load_int(&flag_exit)) {
         while (!custom_atomic_load_int(&run_tracking_in_thread)) {
             if (custom_atomic_load_int(&flag_exit)) return 0;
             this_thread_yield();
         }
 
-        if (trackingOnOff == 1)
+        if (g_trackingOnOff == TRUE)
         {
+            width = get_width_mat(det_img);
+            height = get_height_mat(det_img);
+
+            if (g_trackingInterfaceUdpSocket.IsRecvData() == TRUE)
+            {
+                int _trackingStatus = 0;
+                string recvData = g_trackingInterfaceUdpSocket.PopRecvData();
+                g_trackingInterfaceUdpSocket.ParseInterfaceFormat(recvData,
+                    groupNum,
+                    init_left, init_right, init_top, init_bottom, recvWidth, recvHeight,
+                    _trackingStatus);
+
+                if (groupNum == g_groupNum)
+                {
+                    g_trackingStatus = (TRACKING_STATUS)_trackingStatus;
+                }
+            }
+
             //시간측정 위한 코드
             double time = what_time_is_it_now();//
             //
 
-            switch (trackingStatus)
+            switch (g_trackingStatus)
             {
-            case 1:
+            case TRACKING_IDLE:
+            {
+                left = 0;
+                right = 0;
+                top = 0;
+                bottom = 0;
+            }
+            break;
+            case TRACKING_START://트랙킹 시작
             {
                 BOOL ret = init_tracker(det_s, init_left, init_right, init_top, init_bottom);
 
                 if (ret == TRUE)
                 {
-                    trackingStatus = 2;
+                    g_trackingStatus = TRACKING_ING;
                 }
                 else
                 {
-                    trackingStatus = 0;
+                    g_trackingStatus = TRACKING_FAILURE;
                 }
             }
             break;
-            case 2:
+            case TRACKING_ING:
             {
-                int  left = 0, right = 0, top = 0, bottom = 0;
                 BOOL ret = update_tracking_info(det_s, &left, &right, &top, &bottom);
-
                 if (ret == TRUE)
                 {
-                    trackingStatus = 2;
+                    g_trackingStatus = TRACKING_ING;
                 }
                 else
                 {
-                    trackingStatus = 0;
+                    g_trackingStatus = TRACKING_FAILURE;
                 }
             }
             break;
+            case TRACKING_FAILURE:
+            {
+                g_trackingStatus = TRACKING_IDLE;
+            }
+            break;
+
             default:
                 break;
             }
 
-            printf("tracking process time %f seconds.\n", what_time_is_it_now() - time);
+            string packet = g_trackingInterfaceUdpSocket.MakeInterfaceFormat(
+                g_groupNum, left, right, top, bottom,
+                width, height,
+                g_trackingStatus);
+            g_trackingInterfaceUdpSocket.SetSendData(packet);
+
+            printf("tracking process time %f seconds. \n", (what_time_is_it_now() - time));
         }
         custom_atomic_store_int(&run_tracking_in_thread, 0);
     }
@@ -287,6 +344,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
     if (custom_create_thread(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
     if (custom_create_thread(&tracking_thread, 0, tracking_in_thread, 0)) error("Thread creation failed");
 
+    
     fetch_in_thread_sync(0); //fetch_in_thread(0);
     det_img = in_img;
     det_s = in_s;
@@ -335,6 +393,11 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
     float avg_fps = 0;
     int frame_counter = 0;
     int global_frame_counter = 0;
+
+    g_trackingInterfaceUdpSocket.CreateSocket(
+        "127.0.0.1", 1472,
+        "127.0.0.1", 1473,
+        "TrackingInterfaceUdpSocket");
 
     while(1){
         ++count;
