@@ -28,6 +28,9 @@
 static int g_groupNum = 1;
 static BOOL g_trackingOnOff = TRUE;
 static int init_left = 0, init_right = 0, init_top = 0, init_bottom = 0;
+static int tracking_left = 0, tracking_right = 0, tracking_top = 0, tracking_bottom = 0;
+static int trackingVideoWidth = 0;
+static int trackingVideoHeight = 0;
 
 enum TRACKING_STATUS
 {
@@ -131,18 +134,20 @@ void *detect_in_thread(void *ptr)
         //시간측정 위한 코드
         double time = what_time_is_it_now();//
         //
-
-        float *prediction = network_predict(net, X);//디텍션 함수??
-        printf("Predicted in %f seconds.\n", what_time_is_it_now() - time);
+        
+        float *prediction = network_predict(net, X);//디텍션 함수??        
+        //printf("Predicted in %f seconds.\n", what_time_is_it_now() - time);
+        printf("Predicted in time %d ms. \n", (int)((what_time_is_it_now() - time) * 1000));
 
         cv_images[demo_index] = det_img;
         det_img = cv_images[(demo_index + avg_frames / 2 + 1) % avg_frames];
         demo_index = (demo_index + 1) % avg_frames;
-
+              
         if (letter_box)
             dets = get_network_boxes(&net, get_width_mat(in_img), get_height_mat(in_img), demo_thresh, demo_thresh, 0, 1, &nboxes, 1); // letter box
         else
             dets = get_network_boxes(&net, net.w, net.h, demo_thresh, demo_thresh, 0, 1, &nboxes, 0); // resized
+      
 
         //const float nms = .45;
         //if (nms) {
@@ -156,15 +161,24 @@ void *detect_in_thread(void *ptr)
     return 0;
 }
 
+void *detect_in_thread_sync(void *ptr)
+{
+    custom_atomic_store_int(&run_detect_in_thread, 1);
+    while (custom_atomic_load_int(&run_detect_in_thread))
+        this_thread_sleep_for(thread_wait_ms);
+    return 0;
+}
+
 //21.03.13 Tracking Thread 함수 추가
 void *tracking_in_thread(void *ptr)
 {
-    int isInit = 0;
-    int width = 0;
-    int height = 0;
-    int left = 0, right = 0, top = 0, bottom = 0;
+    int isInit = 0;  
+  
     int recvWidth = 0, recvHeight = 0;
     int groupNum = 0;
+    int failDispCnt = 0;
+    
+    float ratio = 0;
     while (!custom_atomic_load_int(&flag_exit)) {
         while (!custom_atomic_load_int(&run_tracking_in_thread)) {
             if (custom_atomic_load_int(&flag_exit)) return 0;
@@ -173,9 +187,9 @@ void *tracking_in_thread(void *ptr)
 
         if (g_trackingOnOff == TRUE)
         {
-            width = get_width_mat(det_img);
-            height = get_height_mat(det_img);
-
+         /*   width = get_width_mat(det_img);
+            height = get_height_mat(det_img);*/
+            
             if (g_trackingInterfaceUdpSocket.IsRecvData() == TRUE)
             {
                 int _trackingStatus = 0;
@@ -184,6 +198,15 @@ void *tracking_in_thread(void *ptr)
                     groupNum,
                     init_left, init_right, init_top, init_bottom, recvWidth, recvHeight,
                     _trackingStatus);
+
+                trackingVideoWidth = 500;
+                trackingVideoHeight = get_resized_height(in_img, trackingVideoWidth);
+
+                ratio = (float)trackingVideoWidth / (float)recvWidth;
+                init_left *= ratio;
+                init_right *= ratio;
+                init_top *= ratio;
+                init_bottom *= ratio;
 
                 if (groupNum == g_groupNum)
                 {
@@ -199,15 +222,23 @@ void *tracking_in_thread(void *ptr)
             {
             case TRACKING_IDLE:
             {
-                left = 0;
-                right = 0;
-                top = 0;
-                bottom = 0;
+                tracking_left = 0;
+                tracking_right = 0;
+                tracking_top = 0;
+                tracking_bottom = 0;
+
+                failDispCnt = 0;
             }
             break;
             case TRACKING_START://트랙킹 시작
             {
-                BOOL ret = init_tracker(det_s, init_left, init_right, init_top, init_bottom);
+                mat_cv* temp = resizeMat(det_img, trackingVideoWidth, trackingVideoHeight);
+                BOOL ret = FALSE;
+                if (temp)
+                {
+                    ret = init_tracker(temp, init_left, init_right, init_top, init_bottom);
+                    delete temp;
+                }
 
                 if (ret == TRUE)
                 {
@@ -221,7 +252,13 @@ void *tracking_in_thread(void *ptr)
             break;
             case TRACKING_ING:
             {
-                BOOL ret = update_tracking_info(det_s, &left, &right, &top, &bottom);
+                mat_cv* temp = resizeMat(det_img, trackingVideoWidth, trackingVideoHeight);
+                BOOL ret = FALSE;
+                if (temp)
+                {
+                    ret = update_tracking_info(temp, &tracking_left, &tracking_right, &tracking_top, &tracking_bottom);
+                    delete temp;
+                }
                 if (ret == TRUE)
                 {
                     g_trackingStatus = TRACKING_ING;
@@ -234,7 +271,12 @@ void *tracking_in_thread(void *ptr)
             break;
             case TRACKING_FAILURE:
             {
-                g_trackingStatus = TRACKING_IDLE;
+                if (failDispCnt >= 30)
+                {
+                    g_trackingStatus = TRACKING_IDLE;
+                }
+                failDispCnt++;
+                
             }
             break;
 
@@ -243,12 +285,12 @@ void *tracking_in_thread(void *ptr)
             }
 
             string packet = g_trackingInterfaceUdpSocket.MakeInterfaceFormat(
-                g_groupNum, left, right, top, bottom,
-                width, height,
+                g_groupNum, tracking_left, tracking_right, tracking_top, tracking_bottom,
+                trackingVideoWidth, trackingVideoHeight,
                 g_trackingStatus);
             g_trackingInterfaceUdpSocket.SetSendData(packet);
 
-            printf("tracking process time %f seconds. \n", (what_time_is_it_now() - time));
+            printf("tracking process time %d ms. \n", (int)((what_time_is_it_now() - time)*1000));
         }
         custom_atomic_store_int(&run_tracking_in_thread, 0);
     }
@@ -256,10 +298,11 @@ void *tracking_in_thread(void *ptr)
     return 0;
 }
 
-void *detect_in_thread_sync(void *ptr)
+void *tracking_in_thread_sync(void *ptr)
 {
-    custom_atomic_store_int(&run_detect_in_thread, 1);
-    while (custom_atomic_load_int(&run_detect_in_thread)) this_thread_sleep_for(thread_wait_ms);
+    custom_atomic_store_int(&run_tracking_in_thread, 1);
+    while (custom_atomic_load_int(&run_tracking_in_thread))
+        this_thread_sleep_for(thread_wait_ms);
     return 0;
 }
 
@@ -339,10 +382,10 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
     custom_thread_t fetch_thread = NULL;
     custom_thread_t detect_thread = NULL;
-    custom_thread_t tracking_thread = NULL;
+    //custom_thread_t tracking_thread = NULL;
     if (custom_create_thread(&fetch_thread, 0, fetch_in_thread, 0)) error("Thread creation failed");
     if (custom_create_thread(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
-    if (custom_create_thread(&tracking_thread, 0, tracking_in_thread, 0)) error("Thread creation failed");
+    //if (custom_create_thread(&tracking_thread, 0, tracking_in_thread, 0)) error("Thread creation failed");
 
     
     fetch_in_thread_sync(0); //fetch_in_thread(0);
@@ -351,6 +394,8 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
     fetch_in_thread_sync(0); //fetch_in_thread(0);
     detect_in_thread_sync(0); //fetch_in_thread(0);
+    //tracking_in_thread_sync(0);
+
     det_img = in_img;
     det_s = in_s;
 
@@ -358,14 +403,19 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
         free_detections(dets, nboxes);
         fetch_in_thread_sync(0); //fetch_in_thread(0);
         detect_in_thread_sync(0); //fetch_in_thread(0);
+        //tracking_in_thread_sync(0);
         det_img = in_img;
         det_s = in_s;
     }
 
     int count = 0;
+
+    string windowName = "Video Analysis";
+    int resizedWidth = 500;
+    int resizedHeight = get_resized_height(in_img, resizedWidth);
     if(!prefix && !dont_show){
         int full_screen = 0;
-        create_window_cv("Demo", full_screen, 1352, 1013);
+        create_window_cv(windowName.c_str(), full_screen, resizedWidth, resizedHeight);
     }
 
 
@@ -442,22 +492,32 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
             if (!benchmark && !dontdraw_bbox)
             {
-                draw_detections_cv_v3(show_img, local_dets, local_nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes, demo_ext_output);
+                draw_detections_cv_v3(
+                    show_img, local_dets, local_nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes, demo_ext_output,
+                    tracking_left, tracking_right, tracking_top, tracking_bottom, trackingVideoWidth, trackingVideoHeight);
             }
             free_detections(local_dets, local_nboxes);
 
             printf("\nFPS:%.1f \t AVG_FPS:%.1f\n", fps, avg_fps);
-
+      
             if(!prefix){
                 if (!dont_show) {
                     const int each_frame = max_val_cmp(1, avg_fps / 60);
-                    if(global_frame_counter % each_frame == 0) show_image_mat(show_img, "Demo");
+                    if (global_frame_counter % each_frame == 0)
+                    {
+                        //show_image_mat_resize(show_img, windowName.c_str(), resizedWidth, resizedHeight);
+                        show_image_mat(show_img, windowName.c_str());
+                    }
                     int c = wait_key_cv(1);
                     if (c == 10) {
-                        if (frame_skip == 0) frame_skip = 60;
-                        else if (frame_skip == 4) frame_skip = 0;
-                        else if (frame_skip == 60) frame_skip = 4;
-                        else frame_skip = 0;
+                        if (frame_skip == 0)
+                            frame_skip = 60;
+                        else if (frame_skip == 4)
+                            frame_skip = 0;
+                        else if (frame_skip == 60)
+                            frame_skip = 4;
+                        else
+                            frame_skip = 0;
                     }
                     else if (c == 27 || c == 1048603) // ESC - exit (OpenCV 2.x / 3.x)
                     {
@@ -485,13 +545,17 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
             }
 
             while (custom_atomic_load_int(&run_detect_in_thread)) {
-                if(avg_fps > 180) this_thread_yield();
-                else this_thread_sleep_for(thread_wait_ms);   // custom_join(detect_thread, 0);
+                if(avg_fps > 180)
+                    this_thread_yield();
+                else
+                    this_thread_sleep_for(thread_wait_ms);   // custom_join(detect_thread, 0);
             }
             if (!benchmark) {
                 while (custom_atomic_load_int(&run_fetch_in_thread)) {
-                    if (avg_fps > 180) this_thread_yield();
-                    else this_thread_sleep_for(thread_wait_ms);   // custom_join(fetch_thread, 0);
+                    if (avg_fps > 180)
+                        this_thread_yield();
+                    else
+                        this_thread_sleep_for(thread_wait_ms);   // custom_join(fetch_thread, 0);
                 }
                 free_image(det_s);
             }
@@ -531,7 +595,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
                 start_time = get_time_point();
             }
         }
-    }
+    }//End While
     printf("input video stream closed. \n");
     if (output_video_writer) {
         release_video_writer(&output_video_writer);

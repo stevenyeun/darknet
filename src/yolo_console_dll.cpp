@@ -11,6 +11,28 @@
 #include <cmath>
 
 
+//tracking
+
+#include "CTrackingInterfaceUdpSocket.h"
+CTrackingInterfaceUdpSocket g_trackingInterfaceUdpSocket;
+int g_groupNum = 1;
+BOOL g_trackingOnOff = 1;
+int init_left = 0, init_right = 0, init_top = 0, init_bottom = 0;
+int tracking_left = 0, tracking_right = 0, tracking_top = 0, tracking_bottom = 0;
+
+#pragma comment(lib, "opencv_tracking342")
+
+enum TRACKING_STATUS
+{
+    TRACKING_IDLE = 0,
+    TRACKING_START = 1,
+    TRACKING_ING = 2,
+    TRACKING_FAILURE = 3,
+    TRACKING_CANCEL = 4,
+};
+static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
+//
+
 // It makes sense only for video-Camera (not for video-File)
 // To use - uncomment the following line. Optical-flow is supported only by OpenCV 3.x - 4.x
 //#define TRACK_OPTFLOW
@@ -153,6 +175,7 @@ std::vector<bbox_t> get_3d_coordinates(std::vector<bbox_t> bbox_vect, cv::Mat xy
 #include <opencv2/core/version.hpp>
 #ifndef CV_VERSION_EPOCH     // OpenCV 3.x and 4.x
 #include <opencv2/videoio/videoio.hpp>
+#include "yolo_console_dll.h"
 #define OPENCV_VERSION CVAUX_STR(CV_VERSION_MAJOR)"" CVAUX_STR(CV_VERSION_MINOR)"" CVAUX_STR(CV_VERSION_REVISION)
 #ifndef USE_CMAKE_LIBS
 #pragma comment(lib, "opencv_world" OPENCV_VERSION ".lib")
@@ -177,8 +200,8 @@ std::vector<bbox_t> get_3d_coordinates(std::vector<bbox_t> bbox_vect, cv::Mat xy
 #endif    // CV_VERSION_EPOCH
 
 
-void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std::string> obj_names,
-    int current_det_fps = -1, int current_cap_fps = -1)
+void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std::string> obj_names, std::vector<bbox_t> result_tracking_vec,
+    int current_det_fps = -1, int current_cap_fps = -1, int current_tracking_fps = -1)
 {
     int const colors[6][3] = { { 1,0,1 },{ 0,0,1 },{ 0,1,1 },{ 0,1,0 },{ 1,1,0 },{ 1,0,0 } };
 
@@ -209,8 +232,27 @@ void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std
             if(!coords_3d.empty()) putText(mat_img, coords_3d, cv::Point2f(i.x, i.y-1), cv::FONT_HERSHEY_COMPLEX_SMALL, 0.8, cv::Scalar(0, 0, 0), 1);
         }
     }
-    if (current_det_fps >= 0 && current_cap_fps >= 0) {
-        std::string fps_str = "FPS detection: " + std::to_string(current_det_fps) + "   FPS capture: " + std::to_string(current_cap_fps);
+
+    //draw tracking box
+    for (auto &i : result_tracking_vec) {
+        cv::Scalar color = obj_id_to_color(i.track_id);
+        cv::rectangle(mat_img, cv::Rect(i.x, i.y, i.w, i.h), color, 2);
+        if (i.track_id > 0)
+        {
+            std::string obj_name = "Tracking " + std::to_string(i.track_id);
+            cv::Size const text_size = getTextSize(obj_name, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, 2, 0);
+            int max_width = (text_size.width > i.w + 2) ? text_size.width : (i.w + 2);
+            max_width = std::max(max_width, (int)i.w + 2);
+            cv::rectangle(mat_img, cv::Point2f(std::max((int)i.x - 1, 0), std::max((int)i.y - 35, 0)),
+                cv::Point2f(std::min((int)i.x + max_width, mat_img.cols - 1), std::min((int)i.y, mat_img.rows - 1)),
+                color, CV_FILLED, 8, 0);
+            putText(mat_img, obj_name, cv::Point2f(i.x, i.y - 16), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, cv::Scalar(0, 0, 0), 2);
+        }
+    }
+
+    if (current_det_fps >= 0 && current_cap_fps >= 0 || current_tracking_fps >= 0)
+    {
+        std::string fps_str = "FPS detection: " + std::to_string(current_det_fps) + "   FPS tracking: " + std::to_string(current_tracking_fps) + "   FPS capture: " + std::to_string(current_cap_fps);
         putText(mat_img, fps_str, cv::Point2f(10, 20), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, cv::Scalar(50, 255, 0), 2);
     }
 }
@@ -269,12 +311,14 @@ public:
     {}
 };
 
+//메인함수
 int main(int argc, char *argv[])
 {
     std::string  names_file = "data/coco.names";
     std::string  cfg_file = "cfg/yolov3.cfg";
     std::string  weights_file = "yolov3.weights";
     std::string filename;
+    
 
     if (argc > 4) {    //voc.names yolo-voc.cfg yolo-voc.weights test.mp4
         names_file = argv[1];
@@ -286,14 +330,23 @@ int main(int argc, char *argv[])
 
     float const thresh = (argc > 5) ? std::stof(argv[5]) : 0.2;
 
+    //7
+    int groupNum = (argc > 7) ? std::stof(argv[7]) : 1;
+
+    //8
+    int jsonPort = (argc > 8) ? std::stof(argv[8]) : 1011;
+
+    //9
+    bool showVideo = (argc > 9) ? std::stof(argv[9]) : true;
+
     Detector detector(cfg_file, weights_file);
 
     auto obj_names = objects_names_from_file(names_file);
     std::string out_videofile = "result.avi";
     bool const save_output_videofile = false;   // true - for history
-    bool const send_network = false;        // true - for remote detection
+    bool const send_network = true;        // true - for remote detection
     bool const use_kalman_filter = false;   // true - for stationary camera
-
+    
     bool detection_sync = true;             // true - for video-file
 #ifdef TRACK_OPTFLOW    // for slow GPU
     detection_sync = false;
@@ -324,8 +377,8 @@ int main(int argc, char *argv[])
                     detection_sync = false;
 
                 cv::Mat cur_frame;
-                std::atomic<int> fps_cap_counter(0), fps_det_counter(0);
-                std::atomic<int> current_fps_cap(0), current_fps_det(0);
+                std::atomic<int> fps_cap_counter(0), fps_det_counter(0), fps_tracking_counter(0)/*tracking*/;
+                std::atomic<int> current_fps_cap(0), current_fps_det(0), current_fps_tracking(0)/*tracking*/;
                 std::atomic<bool> exit_flag(false);
                 std::chrono::steady_clock::time_point steady_start, steady_end;
                 int video_fps = 25;
@@ -403,9 +456,11 @@ int main(int argc, char *argv[])
 
                 const bool sync = detection_sync; // sync data exchange
                 send_one_replaceable_object_t<detection_data_t> cap2prepare(sync), cap2draw(sync),
-                    prepare2detect(sync), detect2draw(sync), draw2show(sync), draw2write(sync), draw2net(sync);
+                    prepare2detect(sync), detect2draw(sync),
+                    prepare2tracking(sync), tracking2draw(sync),//tracking
+                    draw2show(sync), draw2write(sync), draw2net(sync);
 
-                std::thread t_cap, t_prepare, t_detect, t_post, t_draw, t_write, t_network;
+                std::thread t_cap, t_prepare, t_detect, t_tracking/*tracking*/, t_post, t_draw, t_write, t_network;
 
                 // capture new video-frame
                 if (t_cap.joinable()) t_cap.join();
@@ -450,10 +505,13 @@ int main(int argc, char *argv[])
 
 
                 // pre-processing video frame (resize, convertion)
+                //비디오 프레임 전처리 과정
                 t_prepare = std::thread([&]()
                 {
                     std::shared_ptr<image_t> det_image;
+                    std::shared_ptr<image_t> det_image_tracking;
                     detection_data_t detection_data;
+                    detection_data_t tracking_data;//tracking
                     do {
                         detection_data = cap2prepare.receive();
 
@@ -461,6 +519,13 @@ int main(int argc, char *argv[])
                         detection_data.det_image = det_image;
                         prepare2detect.send(detection_data);    // detection
 
+#if 1//tracking
+                        //가로 해상도 기준으로 리사이즈
+                        tracking_data.exit_flag = detection_data.exit_flag;
+                        det_image_tracking = detector.mat_to_image_resize_byValue(detection_data.cap_frame, 500);
+                        tracking_data.det_image = det_image_tracking;
+                        prepare2tracking.send(tracking_data);
+#endif
                     } while (!detection_data.exit_flag);
                     std::cout << " t_prepare exit \n";
                 });
@@ -489,11 +554,53 @@ int main(int argc, char *argv[])
                     std::cout << " t_detect exit \n";
                 });
 
+#if 1//tracking by opencv                
+                if (t_tracking.joinable()) t_tracking.join();
+                t_tracking = std::thread([&]()
+                    {
+                        std::shared_ptr<image_t> det_image;
+                        detection_data_t tracking_data;
+                        
+                        int isInit = 0;
+                        int recvWidth = 0, recvHeight = 0;
+                        int groupNum = 0;
+                        int failDispCnt = 0;
+                        float ratio = 0;
+
+                        do {
+                            tracking_data = prepare2tracking.receive();
+                            det_image = tracking_data.det_image;
+
+                            std::vector<bbox_t> result_tracking_vec;
+
+                            if (det_image)
+                            {
+                                cv::Mat tempMat = image_to_mat(*det_image);
+                                int trackingVideoWidth = (*tracking_data.det_image).w;
+                                int trackingVideoHeight = (*tracking_data.det_image).h;                                
+                                if (g_trackingOnOff == TRUE)
+                                {
+                                    ProcessTracking(groupNum, recvWidth, recvHeight, ratio, trackingVideoWidth, failDispCnt, tempMat, trackingVideoHeight);
+
+                                    //printf("tracking process time %d ms. \n", (int)((what_time_is_it_now() - time) * 1000));
+                                }
+                            }
+                            fps_tracking_counter++;
+                            //std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+                            tracking_data.new_detection = true;
+                            tracking_data.result_vec = result_tracking_vec;
+                            tracking2draw.send(tracking_data);
+                        } while (!tracking_data.exit_flag);
+                        std::cout << " t_tracking exit \n";
+                    });
+#endif
                 // draw rectangles (and track objects)
                 t_draw = std::thread([&]()
                 {
                     std::queue<cv::Mat> track_optflow_queue;
                     detection_data_t detection_data;
+                    detection_data_t tracking_data;//tracking
                     do {
 
                         // for Video-file
@@ -507,7 +614,8 @@ int main(int argc, char *argv[])
                             if (detect2draw.is_object_present()) {
                                 cv::Mat old_cap_frame = detection_data.cap_frame;   // use old captured frame
                                 detection_data = detect2draw.receive();
-                                if (!old_cap_frame.empty()) detection_data.cap_frame = old_cap_frame;
+                                if (!old_cap_frame.empty())
+                                    detection_data.cap_frame = old_cap_frame;
                             }
                             // get new Captured frame
                             else {
@@ -515,11 +623,22 @@ int main(int argc, char *argv[])
                                 detection_data = cap2draw.receive();
                                 detection_data.result_vec = old_result_vec;
                             }
+
+                            // get new Tracking result if present
+                            if (tracking2draw.is_object_present()) {
+                                
+                                tracking_data = tracking2draw.receive();
+                            }
+                            else//use old
+                            {
+                                
+                            }
                         }
 
                         cv::Mat cap_frame = detection_data.cap_frame;
                         cv::Mat draw_frame = detection_data.cap_frame.clone();
                         std::vector<bbox_t> result_vec = detection_data.result_vec;
+                        std::vector<bbox_t> result_tracking_vec = tracking_data.result_vec;
 
 #ifdef TRACK_OPTFLOW
                         if (detection_data.new_detection) {
@@ -558,7 +677,8 @@ int main(int argc, char *argv[])
 
                         //small_preview.set(draw_frame, result_vec);
                         //large_preview.set(draw_frame, result_vec);
-                        draw_boxes(draw_frame, result_vec, obj_names, current_fps_det, current_fps_cap);
+                        draw_boxes(draw_frame, result_vec, obj_names, result_tracking_vec, current_fps_det, current_fps_cap,
+                            current_fps_tracking);
                         //show_console_result(result_vec, obj_names, detection_data.frame_id);
                         //large_preview.draw(draw_frame);
                         //small_preview.draw(draw_frame, true);
@@ -574,6 +694,7 @@ int main(int argc, char *argv[])
 
 
                 // write frame to videofile
+                //비디오 파일로 저장
                 t_write = std::thread([&]()
                 {
                     if (output_video.isOpened()) {
@@ -591,6 +712,7 @@ int main(int argc, char *argv[])
                 });
 
                 // send detection to the network
+                //Json 형태로 Http Send
                 t_network = std::thread([&]()
                 {
                     if (send_network) {
@@ -598,7 +720,7 @@ int main(int argc, char *argv[])
                         do {
                             detection_data = draw2net.receive();
 
-                            detector.send_json_http(detection_data.result_vec, obj_names, detection_data.frame_id, filename);
+                            detector.send_json_http(detection_data.result_vec, obj_names, detection_data.frame_id, filename, 400000, jsonPort);
 
                         } while (!detection_data.exit_flag);
                     }
@@ -614,10 +736,13 @@ int main(int argc, char *argv[])
                     float time_sec = std::chrono::duration<double>(steady_end - steady_start).count();
                     if (time_sec >= 1) {
                         current_fps_det = fps_det_counter.load() / time_sec;
+                        current_fps_tracking = fps_tracking_counter.load() / time_sec;
                         current_fps_cap = fps_cap_counter.load() / time_sec;
                         steady_start = steady_end;
                         fps_det_counter = 0;
+                        fps_tracking_counter = 0;
                         fps_cap_counter = 0;
+                        
                     }
 
                     detection_data = draw2show.receive();
@@ -643,6 +768,7 @@ int main(int argc, char *argv[])
                 if (t_cap.joinable()) t_cap.join();
                 if (t_prepare.joinable()) t_prepare.join();
                 if (t_detect.joinable()) t_detect.join();
+                if (t_tracking.joinable()) t_tracking.join();//tracking
                 if (t_post.joinable()) t_post.join();
                 if (t_draw.joinable()) t_draw.join();
                 if (t_write.joinable()) t_write.join();
@@ -672,12 +798,13 @@ int main(int argc, char *argv[])
 
                 auto start = std::chrono::steady_clock::now();
                 std::vector<bbox_t> result_vec = detector.detect_resized(*det_image, mat_img.size().width, mat_img.size().height);
+                std::vector<bbox_t> result_tracking_vec;
                 auto end = std::chrono::steady_clock::now();
                 std::chrono::duration<double> spent = end - start;
                 std::cout << " Time: " << spent.count() << " sec \n";
 
                 //result_vec = detector.tracking_id(result_vec);    // comment it - if track_id is not required
-                draw_boxes(mat_img, result_vec, obj_names);
+                draw_boxes(mat_img, result_vec, obj_names, result_tracking_vec);
                 cv::imshow("window name", mat_img);
                 show_console_result(result_vec, obj_names);
                 cv::waitKey(0);
@@ -697,4 +824,94 @@ int main(int argc, char *argv[])
     }
 
     return 0;
+}
+
+void ProcessTracking(int &groupNum, int &recvWidth, int &recvHeight, float &ratio, int trackingVideoWidth, int &failDispCnt, cv::Mat &tempMat, int trackingVideoHeight)
+{
+    if (g_trackingInterfaceUdpSocket.IsRecvData() == TRUE)
+    {
+        int _trackingStatus = 0;
+        string recvData = g_trackingInterfaceUdpSocket.PopRecvData();
+        g_trackingInterfaceUdpSocket.ParseInterfaceFormat(recvData,
+            groupNum,
+            init_left, init_right, init_top, init_bottom, recvWidth, recvHeight,
+            _trackingStatus);
+
+
+
+        ratio = (float)trackingVideoWidth / (float)recvWidth;
+        init_left *= ratio;
+        init_right *= ratio;
+        init_top *= ratio;
+        init_bottom *= ratio;
+
+        if (groupNum == g_groupNum)
+        {
+            g_trackingStatus = (TRACKING_STATUS)_trackingStatus;
+        }
+    }
+
+    //시간측정 위한 코드
+    //double time = what_time_is_it_now();//
+    //
+
+    switch (g_trackingStatus)
+    {
+    case TRACKING_IDLE:
+    {
+        tracking_left = 0;
+        tracking_right = 0;
+        tracking_top = 0;
+        tracking_bottom = 0;
+
+        failDispCnt = 0;
+    }
+    break;
+    case TRACKING_START://트랙킹 시작
+    {
+        BOOL ret = init_tracker(tempMat, init_left, init_right, init_top, init_bottom);
+
+        if (ret == TRUE)
+        {
+            g_trackingStatus = TRACKING_ING;
+        }
+        else
+        {
+            g_trackingStatus = TRACKING_FAILURE;
+        }
+    }
+    break;
+    case TRACKING_ING:
+    {
+        BOOL ret = update_tracking_info(tempMat, &tracking_left, &tracking_right, &tracking_top, &tracking_bottom);
+        if (ret == TRUE)
+        {
+            g_trackingStatus = TRACKING_ING;
+        }
+        else
+        {
+            g_trackingStatus = TRACKING_FAILURE;
+        }
+    }
+    break;
+    case TRACKING_FAILURE:
+    {
+        if (failDispCnt >= 30)
+        {
+            g_trackingStatus = TRACKING_IDLE;
+        }
+        failDispCnt++;
+
+    }
+    break;
+
+    default:
+        break;
+    }
+
+    string packet = g_trackingInterfaceUdpSocket.MakeInterfaceFormat(
+        g_groupNum, tracking_left, tracking_right, tracking_top, tracking_bottom,
+        trackingVideoWidth, trackingVideoHeight,
+        g_trackingStatus);
+    g_trackingInterfaceUdpSocket.SetSendData(packet);
 }

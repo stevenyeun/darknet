@@ -490,6 +490,54 @@ extern "C" void show_image_mat(mat_cv *mat_ptr, const char *name)
     }
 }
 
+
+extern "C" int get_resized_height(mat_cv *mat_ptr, int toWidth)
+{
+    cv::Mat &mat = *(cv::Mat *)mat_ptr;
+
+    int height = mat.rows;
+    int width = mat.cols;
+
+    //원본 해상도 비율로 계산
+    float ratioWidth = (float)toWidth / (float)width;
+    int resizedHeight = height * ratioWidth;
+
+    return resizedHeight;
+}
+extern "C" mat_cv * resizeMat(mat_cv *mat_ptr, int toWidth, int toHeight)
+{
+    try {
+        if (mat_ptr == NULL)
+            return NULL;
+        cv::Mat &mat = *(cv::Mat *)mat_ptr;
+        cv::Mat * new_img = new cv::Mat(toHeight, toWidth, CV_8UC(3));
+        cv::resize(mat, *new_img, new_img->size(), 0, 0, cv::INTER_NEAREST);
+        cv::cvtColor(*new_img, *new_img, cv::COLOR_RGB2BGR);
+
+        return (mat_cv *)new_img;
+    }
+    catch (...) {
+        cerr << "OpenCV exception: show_image_mat \n";
+    }
+    return NULL;
+}
+extern "C" void show_image_mat_resize(mat_cv *mat_ptr, const char *name, int toWidth, int toHeight)
+{
+    try {
+        if (mat_ptr == NULL) return;
+        cv::Mat &mat = *(cv::Mat *)mat_ptr;
+        cv::namedWindow(name, cv::WINDOW_NORMAL);
+
+        cv::Mat new_img = cv::Mat(toHeight, toWidth, CV_8UC(3));
+        cv::resize(mat, new_img, new_img.size(), 0, 0, cv::INTER_NEAREST);
+        cv::cvtColor(new_img, new_img, cv::COLOR_RGB2BGR);
+        
+        cv::imshow(name, new_img);
+    }
+    catch (...) {
+        cerr << "OpenCV exception: show_image_mat \n";
+    }
+}
 // ====================================================================
 // Video Writer
 // ====================================================================
@@ -786,7 +834,11 @@ extern "C" image get_image_from_stream_resize(cap_cv *cap, int w, int h, int c, 
         printf("Video stream: %d x %d \n", src->cols, src->rows);
     }
     else
+    {
         src = (cv::Mat*)get_capture_frame_cv(cap);//프레임 읽어옴
+        src = (cv::Mat*)get_capture_frame_cv(cap);//프레임 읽어옴
+        src = (cv::Mat*)get_capture_frame_cv(cap);//프레임 읽어옴
+    }
 
     if (!wait_for_stream(cap, src, dont_close)) return make_empty_image(0, 0, 0);
 
@@ -878,7 +930,8 @@ extern "C" void save_cv_jpg(mat_cv *img_src, const char *name)
 // ====================================================================
 // Draw Detection
 // ====================================================================
-extern "C" void draw_detections_cv_v3(mat_cv* mat, detection *dets, int num, float thresh, char **names, image **alphabet, int classes, int ext_output)
+extern "C" void draw_detections_cv_v3(mat_cv* mat, detection *dets, int num, float thresh, char **names, image **alphabet, int classes, int ext_output,
+    int trackingLeft, int trackingRight, int trackingTop, int trackingBottom, int trackingVideoWidth, int trackingVideoHeight)
 {
     try {
         cv::Mat *show_img = (cv::Mat*)mat;
@@ -887,6 +940,35 @@ extern "C" void draw_detections_cv_v3(mat_cv* mat, detection *dets, int num, flo
         static int frame_id = 0;
         frame_id++;
 
+        //트랙킹 바운더리 박스 그리기
+        if (trackingLeft != 0 && trackingTop != 0 && trackingRight != 0 && trackingBottom != 0 &&
+            trackingVideoWidth != 0 && trackingVideoHeight != 0)
+        {
+            cv::Scalar trackingColor;
+            int trackingWidth = std::max(1.0f, show_img->rows * .002f);
+            trackingColor.val[0] = 255 * 256;//r
+            trackingColor.val[1] = 0 * 256;//g
+            trackingColor.val[2] = 0 * 256;//b
+
+
+            cv::Point tracking_pt1, tracking_pt2;
+
+
+            int renderWidth = show_img->cols;
+            int renderHeight = show_img->rows;
+
+            //renderWidth : trackingVideoWidth : ? : Left
+            float ratio = (float)renderWidth / (float)trackingVideoWidth;
+
+            tracking_pt1.x = trackingLeft * ratio;
+            tracking_pt1.y = trackingTop * ratio;
+            tracking_pt2.x = trackingRight * ratio;
+            tracking_pt2.y = trackingBottom * ratio;
+
+            cv::rectangle(*show_img, tracking_pt1, tracking_pt2, trackingColor, trackingWidth, 8, 0);
+        }
+        //
+        
         for (i = 0; i < num; ++i) {
             char labelstr[4096] = { 0 };
             int class_id = -1;
@@ -1540,52 +1622,60 @@ void show_opencv_info()
 
 
 cv::Ptr<cv::Tracker> tracker;//opencv Tracker
-int init_tracker(image frame, int left, int right, int top, int bottom)
-{
-    // List of tracker types in OpenCV 3.4.1
-    std::string trackerTypes[8] = { "BOOSTING", "MIL", "KCF", "TLD","MEDIANFLOW", "GOTURN", "MOSSE", "CSRT" };
-    // vector <string> trackerTypes(types, std::end(types));
+std::string trackerType = "";
 
-    // Create a tracker
-    std::string trackerType = trackerTypes[3];
-    printf("trackerType : %s \r\n", trackerType);    
+// List of tracker types in OpenCV 3.4.1
+std::string trackerTypes[8] = { "BOOSTING", "MIL", "KCF", "TLD","MEDIANFLOW", "GOTURN", "MOSSE", "CSRT" };
+int init_tracker(mat_cv *mat, int left, int right, int top, int bottom)
+{
+    if(tracker != NULL)
+        tracker->clear();
+    /*if (trackerType == "")*/
+    {
+        // vector <string> trackerTypes(types, std::end(types));
+
+  // Create a tracker
+        trackerType = trackerTypes[7];
+        printf("trackerType : %s \r\n", trackerType);
 
 #if (CV_MINOR_VERSION < 3)
-    {
-        tracker = Tracker::create(trackerType);
-    }
+        {
+            tracker = Tracker::create(trackerType);
+        }
 #else
-    {
-        if (trackerType == "BOOSTING")
-            tracker = cv::TrackerBoosting::create();
-        if (trackerType == "MIL")
-            tracker = cv::TrackerMIL::create();
-        if (trackerType == "KCF")
-            tracker = cv::TrackerKCF::create();
-        if (trackerType == "TLD")
-            tracker = cv::TrackerTLD::create();
-        if (trackerType == "MEDIANFLOW")
-            tracker = cv::TrackerMedianFlow::create();
-        if (trackerType == "GOTURN")
-            tracker = cv::TrackerGOTURN::create();
-        if (trackerType == "MOSSE")
-            tracker = cv::TrackerMOSSE::create();
-        if (trackerType == "CSRT")
-            tracker = cv::TrackerCSRT::create();
-    }
+        {
+            if (trackerType == "BOOSTING")//0
+                tracker = cv::TrackerBoosting::create();
+            if (trackerType == "MIL")//1
+                tracker = cv::TrackerMIL::create();
+            if (trackerType == "KCF")//2
+                tracker = cv::TrackerKCF::create();
+            if (trackerType == "TLD")//3
+                tracker = cv::TrackerTLD::create();
+            if (trackerType == "MEDIANFLOW")//4
+                tracker = cv::TrackerMedianFlow::create();
+            if (trackerType == "GOTURN")//5
+                tracker = cv::TrackerGOTURN::create();
+            if (trackerType == "MOSSE")//6
+                tracker = cv::TrackerMOSSE::create();
+            if (trackerType == "CSRT")//7
+                tracker = cv::TrackerCSRT::create();
+        }
 #endif
 
+    }
+ 
     // Define initial bounding box
     //좌표 변환
-    int x = (right - left) / 2;
-    int y = (bottom - top) / 2;
+    int x = left + ((right - left) / 2);
+    int y = top + ((bottom - top) / 2);
     int width = (right - left);
     int height = (bottom - top);
 
     cv::Rect2d bbox(x, y, width, height);
-    cv::Mat temp = image_to_mat(frame);
+    /*cv::Mat temp = image_to_mat(frame);*/
 
-    bool ret = tracker->init(temp, bbox);
+    bool ret = tracker->init(*(cv::Mat *)mat, bbox);
 
     if (ret == true)
     {
@@ -1597,21 +1687,21 @@ int init_tracker(image frame, int left, int right, int top, int bottom)
     }
 }
 
-int update_tracking_info(image frame, int * left, int * right, int * top, int * bottom)
+int update_tracking_info(mat_cv *mat, int * left, int * right, int * top, int * bottom)
 {
     bool ret = false;
 
-    cv::Mat temp = image_to_mat(frame);
+    //cv::Mat temp = image_to_mat(frame);
     cv::Rect2d bbox;
-    ret = tracker->init(temp, bbox);
+    ret = tracker->update(*(cv::Mat *)mat, bbox);
 
     if (ret == true)
     {
         *left = bbox.x - (bbox.width / 2);
         *right = bbox.x + (bbox.width / 2);
 
-        *top = bbox.x - (bbox.height / 2);
-        *bottom = bbox.x + (bbox.height / 2);
+        *top = bbox.y - (bbox.height / 2);
+        *bottom = bbox.y + (bbox.height / 2);
 
         return 1;
     }

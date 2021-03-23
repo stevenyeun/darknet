@@ -58,6 +58,10 @@ void show_image_cv(image p, const char *name);
 //void show_image_cv_ipl(mat_cv *disp, const char *name);
 void show_image_mat(mat_cv *mat_ptr, const char *name);
 
+int get_resized_height(mat_cv *mat_ptr, int toWidth);
+mat_cv * resizeMat(mat_cv *mat_ptr, int toWidth, int toHeight);
+void show_image_mat_resize(mat_cv *mat_ptr, const char *name, int toWidth, int toHeight);
+
 // Video Writer
 write_cv *create_video_writer(char *out_filename, char c1, char c2, char c3, char c4, int fps, int width, int height, int is_color);
 void write_frame_cv(write_cv *output_video_writer, mat_cv *mat);
@@ -92,7 +96,8 @@ void save_cv_png(mat_cv *img, const char *name);
 void save_cv_jpg(mat_cv *img, const char *name);
 
 // Draw Detection
-void draw_detections_cv_v3(mat_cv* show_img, detection *dets, int num, float thresh, char **names, image **alphabet, int classes, int ext_output);
+void draw_detections_cv_v3(mat_cv* show_img, detection *dets, int num, float thresh, char **names, image **alphabet, int classes, int ext_output,
+    int trackingLeft, int trackingRight, int trackingTop, int trackingBottom, int trackingVideoWidth, int trackingVideoHeight);
 
 // Draw Loss & Accuracy chart
 mat_cv* draw_train_chart(char *windows_name, float max_img_loss, int max_batches, int number_of_lines, int img_size, int dont_show, char* chart_path);
@@ -123,10 +128,10 @@ void show_opencv_info();
 #if 1//210313 opencv 이용 Tracking
 
 //트랙커 초기화
-int init_tracker(image frame, int left, int right, int top, int bottom);
+int init_tracker(mat_cv * frame, int left, int right, int top, int bottom);
 
 //트랙킹 정보 업데이트
-int update_tracking_info(image frame, int * left, int * right, int * top, int * bottom);
+int update_tracking_info(mat_cv * frame, int * left, int * right, int * top, int * bottom);
 
 #endif
 

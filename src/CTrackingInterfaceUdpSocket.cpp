@@ -14,7 +14,11 @@ UINT SenderThread(PVOID lpParam)
     //printf("채널=%s TCP CMulticastSenderSocket 생성됨 \n", pObj->GetSocketName());
 
     SOCKET socket = pObj->GetSenderSocket();
-
+    sockaddr_in send_addr;
+    memset(&send_addr, 0, sizeof(SOCKADDR_IN));
+    send_addr.sin_family = AF_INET;
+    send_addr.sin_addr.s_addr = inet_addr(pObj->GetDestAddr().c_str());					// this is our test destination IP
+    send_addr.sin_port = htons(pObj->GetDestPort());
     while (1)
     {
         if (pObj->IsSendData() == TRUE)
@@ -27,12 +31,7 @@ UINT SenderThread(PVOID lpParam)
 
 
 
-#if 1//멀티캐스트 전송
-            sockaddr_in send_addr;
-            memset(&send_addr, 0, sizeof(SOCKADDR_IN));
-            send_addr.sin_family = AF_INET;
-            send_addr.sin_addr.s_addr = inet_addr(pObj->GetDestAddr().c_str());					// this is our test destination IP
-            send_addr.sin_port = htons(pObj->GetDestPort());
+#if 1         
             if (sendto(socket, (const char*)&byBuffer, nSize, MSG_DONTROUTE, (sockaddr*)&send_addr, sizeof(send_addr)) == INVALID_SOCKET)
             {
                 //TRACE("\nError in Sending data on the socket - %d", WSAGetLastError());
@@ -146,12 +145,12 @@ BOOL CTrackingInterfaceUdpSocket::CreateSocket(string strDestAddr, int destPort,
 
 
 
-    if (m_hRecverThread) // 이미 Thread가 생성되어 있는 경우
+    if (m_hSenderThread) // 이미 Thread가 생성되어 있는 경우
     {
-        if (WaitForSingleObject(m_hRecverThread, 0) == WAIT_TIMEOUT) { // Thread Still Running
+        if (WaitForSingleObject(m_hSenderThread, 0) == WAIT_TIMEOUT) { // Thread Still Running
             return 0;    // Start 거부
         }
-        CloseHandle(m_hRecverThread);
+        CloseHandle(m_hSenderThread);
     }
 
     // Thread 생성
@@ -270,7 +269,7 @@ string CTrackingInterfaceUdpSocket::MakeInterfaceFormat(int group, int left, int
 {
     char buffer[256];
     sprintf(buffer, "%d;%d;%d;%d;%d;%d;%d;%d;",
-        group, left, right, top, bottom, videoWidth, videoWidth, status);
+        group, left, right, top, bottom, videoWidth, videoHeight, status);
 
     return string(buffer);
 }
