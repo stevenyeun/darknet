@@ -1,3 +1,4 @@
 #pragma once
 
-void ProcessTracking(int &groupNum, int &recvWidth, int &recvHeight, float &ratio, int trackingVideoWidth, int &failDispCnt, cv::Mat &tempMat, int trackingVideoHeight);
+
+std::vector<bbox_t> ProcessTracking(cv::Mat &tempMat);

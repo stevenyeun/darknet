@@ -31,6 +31,8 @@ enum TRACKING_STATUS
     TRACKING_CANCEL = 4,
 };
 static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
+
+
 //
 
 // It makes sense only for video-Camera (not for video-File)
@@ -43,6 +45,130 @@ static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
 
 
 #include "yolo_v2_class.hpp"    // imported functions from DLL
+
+
+
+std::vector<bbox_t> ProcessTracking(cv::Mat &tempMat)
+{
+    int trackingVideoWidth = tempMat.cols;
+    int trackingVideoHeight = tempMat.rows;
+    static int recvWidth = 0;
+    static int recvHeight = 0;
+    std::vector<bbox_t> result;
+
+    if (g_trackingInterfaceUdpSocket.IsRecvData() == TRUE)
+    {
+        int recvTrackingStatus = 0;
+        int recv_groupNum = 0;
+        
+
+        string recvData = g_trackingInterfaceUdpSocket.PopRecvData();
+        g_trackingInterfaceUdpSocket.ParseInterfaceFormat(recvData,
+            recv_groupNum,
+            init_left, init_right, init_top, init_bottom, recvWidth, recvHeight,
+            recvTrackingStatus);
+
+
+
+        float ratio_width = (float)trackingVideoWidth / (float)recvWidth;
+        float ratio_height = (float)trackingVideoHeight / (float)recvHeight;
+
+        init_left *= ratio_width;
+        init_right *= ratio_width;
+        init_top *= ratio_height;
+        init_bottom *= ratio_height;
+
+        if (recv_groupNum == g_groupNum)
+        {
+            g_trackingStatus = (TRACKING_STATUS)recvTrackingStatus;
+        }
+    }
+
+    //시간측정 위한 코드
+    //double time = what_time_is_it_now();//
+    //
+    static int failDispCnt = 0;
+    switch (g_trackingStatus)
+    {
+    case TRACKING_IDLE:
+    {
+        tracking_left = 0;
+        tracking_right = 0;
+        tracking_top = 0;
+        tracking_bottom = 0;
+
+        failDispCnt = 0;
+    }
+    break;
+    case TRACKING_START://트랙킹 시작
+    {
+        BOOL ret = init_tracker(tempMat, init_left, init_right, init_top, init_bottom);
+
+        if (ret == TRUE)
+        {
+            g_trackingStatus = TRACKING_ING;
+        }
+        else
+        {
+            g_trackingStatus = TRACKING_FAILURE;
+        }
+    }
+    break;
+    case TRACKING_ING:
+    {
+        BOOL ret = update_tracking_info(tempMat, &tracking_left, &tracking_right, &tracking_top, &tracking_bottom);
+
+        //원본사이즈로
+        float ratio_width = (float)recvWidth /(float)trackingVideoWidth;
+        float ratio_height = (float)recvHeight / (float)trackingVideoHeight;
+
+        bbox_t box;
+        box.track_id = 1;
+        box.x = tracking_left;
+        box.y = tracking_top;
+        box.w = tracking_right - tracking_left;
+        box.h = tracking_bottom - tracking_top;
+        box.x *= ratio_width;
+        box.y *= ratio_height;
+        box.w *= ratio_width;
+        box.h *= ratio_height;
+
+        result.push_back(box);
+
+        if (ret == TRUE)
+        {
+            g_trackingStatus = TRACKING_ING;
+        }
+        else
+        {
+            g_trackingStatus = TRACKING_FAILURE;
+        }
+    }
+    break;
+    case TRACKING_FAILURE:
+    {
+        if (failDispCnt >= 30)
+        {
+            g_trackingStatus = TRACKING_IDLE;
+        }
+        failDispCnt++;
+
+    }
+    break;
+
+    default:
+        break;
+    }
+
+    string packet = g_trackingInterfaceUdpSocket.MakeInterfaceFormat(
+        g_groupNum, tracking_left, tracking_right, tracking_top, tracking_bottom,
+        trackingVideoWidth, trackingVideoHeight,
+        g_trackingStatus);
+    g_trackingInterfaceUdpSocket.SetSendData(packet);
+
+    return result;
+}
+
 
 #ifdef OPENCV
 #ifdef ZED_STEREO
@@ -331,13 +457,14 @@ int main(int argc, char *argv[])
     float const thresh = (argc > 5) ? std::stof(argv[5]) : 0.2;
 
     //7
-    int groupNum = (argc > 7) ? std::stof(argv[7]) : 1;
+    int groupNum = (argc > 6) ? std::stof(argv[6]) : 1;
 
     //8
-    int jsonPort = (argc > 8) ? std::stof(argv[8]) : 1011;
+    int jsonPort = (argc > 7) ? std::stof(argv[7]) : 1011;
 
     //9
-    bool showVideo = (argc > 9) ? std::stof(argv[9]) : true;
+    bool showVideo = (argc > 8) ? std::stof(argv[8]) : true;
+
 
     Detector detector(cfg_file, weights_file);
 
@@ -377,8 +504,8 @@ int main(int argc, char *argv[])
                     detection_sync = false;
 
                 cv::Mat cur_frame;
-                std::atomic<int> fps_cap_counter(0), fps_det_counter(0), fps_tracking_counter(0)/*tracking*/;
-                std::atomic<int> current_fps_cap(0), current_fps_det(0), current_fps_tracking(0)/*tracking*/;
+                std::atomic<int> fps_cap_counter(0), fps_det_counter(0), fps_tracking_counter(0), fps_prepare_counter(0);/*tracking*/
+                std::atomic<int> current_fps_cap(0), current_fps_det(0), current_fps_tracking(0), current_fps_prepare(0);/*tracking*/
                 std::atomic<bool> exit_flag(false);
                 std::chrono::steady_clock::time_point steady_start, steady_end;
                 int video_fps = 25;
@@ -462,6 +589,13 @@ int main(int argc, char *argv[])
 
                 std::thread t_cap, t_prepare, t_detect, t_tracking/*tracking*/, t_post, t_draw, t_write, t_network;
 
+                //Tracking Inerface
+                g_trackingInterfaceUdpSocket.CreateSocket(
+                    "127.0.0.1", 1472,
+                    "127.0.0.1", 1473,
+                    "TrackingInterfaceUdpSocket");
+
+
                 // capture new video-frame
                 if (t_cap.joinable()) t_cap.join();
                 t_cap = std::thread([&]()
@@ -522,10 +656,12 @@ int main(int argc, char *argv[])
 #if 1//tracking
                         //가로 해상도 기준으로 리사이즈
                         tracking_data.exit_flag = detection_data.exit_flag;
-                        det_image_tracking = detector.mat_to_image_resize_byValue(detection_data.cap_frame, 500);
-                        tracking_data.det_image = det_image_tracking;
+                        //det_image_tracking = detector.mat_to_image_resize_byValue(detection_data.cap_frame, 500)
+                        //tracking_data.det_image = det_image_tracking;
+                        tracking_data.det_image = det_image;
                         prepare2tracking.send(tracking_data);
 #endif
+                        fps_prepare_counter++;
                     } while (!detection_data.exit_flag);
                     std::cout << " t_prepare exit \n";
                 });
@@ -559,16 +695,10 @@ int main(int argc, char *argv[])
                 t_tracking = std::thread([&]()
                     {
                         std::shared_ptr<image_t> det_image;
-                        detection_data_t tracking_data;
-                        
-                        int isInit = 0;
-                        int recvWidth = 0, recvHeight = 0;
-                        int groupNum = 0;
-                        int failDispCnt = 0;
-                        float ratio = 0;
-
+                        detection_data_t tracking_data;                        
+                   
                         do {
-                            tracking_data = prepare2tracking.receive();
+                          tracking_data = prepare2tracking.receive();
                             det_image = tracking_data.det_image;
 
                             std::vector<bbox_t> result_tracking_vec;
@@ -576,17 +706,16 @@ int main(int argc, char *argv[])
                             if (det_image)
                             {
                                 cv::Mat tempMat = image_to_mat(*det_image);
-                                int trackingVideoWidth = (*tracking_data.det_image).w;
-                                int trackingVideoHeight = (*tracking_data.det_image).h;                                
+                                                 
                                 if (g_trackingOnOff == TRUE)
                                 {
-                                    ProcessTracking(groupNum, recvWidth, recvHeight, ratio, trackingVideoWidth, failDispCnt, tempMat, trackingVideoHeight);
+                                    result_tracking_vec = ProcessTracking(tempMat);
 
                                     //printf("tracking process time %d ms. \n", (int)((what_time_is_it_now() - time) * 1000));
                                 }
                             }
                             fps_tracking_counter++;
-                            //std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                            
 
                             tracking_data.new_detection = true;
                             tracking_data.result_vec = result_tracking_vec;
@@ -679,6 +808,8 @@ int main(int argc, char *argv[])
                         //large_preview.set(draw_frame, result_vec);
                         draw_boxes(draw_frame, result_vec, obj_names, result_tracking_vec, current_fps_det, current_fps_cap,
                             current_fps_tracking);
+
+                        printf("current_fps_prepare = %d \r\n", (int)current_fps_prepare);
                         //show_console_result(result_vec, obj_names, detection_data.frame_id);
                         //large_preview.draw(draw_frame);
                         //small_preview.draw(draw_frame, true);
@@ -738,11 +869,13 @@ int main(int argc, char *argv[])
                         current_fps_det = fps_det_counter.load() / time_sec;
                         current_fps_tracking = fps_tracking_counter.load() / time_sec;
                         current_fps_cap = fps_cap_counter.load() / time_sec;
+                        current_fps_prepare = fps_prepare_counter.load() / time_sec;
+
                         steady_start = steady_end;
                         fps_det_counter = 0;
                         fps_tracking_counter = 0;
                         fps_cap_counter = 0;
-                        
+                        fps_prepare_counter = 0;
                     }
 
                     detection_data = draw2show.receive();
@@ -826,92 +959,3 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-void ProcessTracking(int &groupNum, int &recvWidth, int &recvHeight, float &ratio, int trackingVideoWidth, int &failDispCnt, cv::Mat &tempMat, int trackingVideoHeight)
-{
-    if (g_trackingInterfaceUdpSocket.IsRecvData() == TRUE)
-    {
-        int _trackingStatus = 0;
-        string recvData = g_trackingInterfaceUdpSocket.PopRecvData();
-        g_trackingInterfaceUdpSocket.ParseInterfaceFormat(recvData,
-            groupNum,
-            init_left, init_right, init_top, init_bottom, recvWidth, recvHeight,
-            _trackingStatus);
-
-
-
-        ratio = (float)trackingVideoWidth / (float)recvWidth;
-        init_left *= ratio;
-        init_right *= ratio;
-        init_top *= ratio;
-        init_bottom *= ratio;
-
-        if (groupNum == g_groupNum)
-        {
-            g_trackingStatus = (TRACKING_STATUS)_trackingStatus;
-        }
-    }
-
-    //시간측정 위한 코드
-    //double time = what_time_is_it_now();//
-    //
-
-    switch (g_trackingStatus)
-    {
-    case TRACKING_IDLE:
-    {
-        tracking_left = 0;
-        tracking_right = 0;
-        tracking_top = 0;
-        tracking_bottom = 0;
-
-        failDispCnt = 0;
-    }
-    break;
-    case TRACKING_START://트랙킹 시작
-    {
-        BOOL ret = init_tracker(tempMat, init_left, init_right, init_top, init_bottom);
-
-        if (ret == TRUE)
-        {
-            g_trackingStatus = TRACKING_ING;
-        }
-        else
-        {
-            g_trackingStatus = TRACKING_FAILURE;
-        }
-    }
-    break;
-    case TRACKING_ING:
-    {
-        BOOL ret = update_tracking_info(tempMat, &tracking_left, &tracking_right, &tracking_top, &tracking_bottom);
-        if (ret == TRUE)
-        {
-            g_trackingStatus = TRACKING_ING;
-        }
-        else
-        {
-            g_trackingStatus = TRACKING_FAILURE;
-        }
-    }
-    break;
-    case TRACKING_FAILURE:
-    {
-        if (failDispCnt >= 30)
-        {
-            g_trackingStatus = TRACKING_IDLE;
-        }
-        failDispCnt++;
-
-    }
-    break;
-
-    default:
-        break;
-    }
-
-    string packet = g_trackingInterfaceUdpSocket.MakeInterfaceFormat(
-        g_groupNum, tracking_left, tracking_right, tracking_top, tracking_bottom,
-        trackingVideoWidth, trackingVideoHeight,
-        g_trackingStatus);
-    g_trackingInterfaceUdpSocket.SetSendData(packet);
-}
