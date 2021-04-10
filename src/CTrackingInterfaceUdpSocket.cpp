@@ -1,8 +1,6 @@
 #include "CTrackingInterfaceUdpSocket.h"
 
-#include <sstream>
-#include <string>
-#include <vector>
+
 
 UINT SenderThread(PVOID lpParam)
 {

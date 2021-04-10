@@ -1,3 +1,4 @@
+
 #include <iostream>
 #include <iomanip>
 #include <string>
@@ -11,7 +12,12 @@
 #include <cmath>
 
 
-//tracking
+
+#if 1 //tracking
+
+
+#define TRUE 1
+#define FALSE 0
 
 #include "CTrackingInterfaceUdpSocket.h"
 CTrackingInterfaceUdpSocket g_trackingInterfaceUdpSocket;
@@ -31,8 +37,62 @@ enum TRACKING_STATUS
     TRACKING_CANCEL = 4,
 };
 static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
+#endif
+
+#if 1//ffmpeg
 
 
+//https://semoa.tistory.com/992
+#pragma warning (disable : 4996)
+
+extern "C"
+{
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/opt.h>
+#include <libavutil/avassert.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/error.h>
+#include "libswscale/swscale.h"
+
+#pragma comment ( lib, "avformat.lib")
+#pragma comment ( lib, "swscale.lib" )
+#pragma comment ( lib, "avcodec.lib" )
+#pragma comment ( lib, "avutil.lib" )
+#pragma comment ( lib, "avdevice.lib" )
+}
+
+#define INBUF_SIZE 4096
+
+AVFrame *frame = NULL;
+AVFormatContext* input_ctx = NULL;
+AVPacket packet;
+
+int video_stream_index;
+int audio_stream_index;
+
+AVCodec *pCodec = NULL;
+AVCodecContext *video_decoder_ctx;
+AVCodecContext *audio_decoder_ctx;
+
+SwsContext * m_swsctxToBGR24 = NULL;
+
+
+#endif
+
+
+
+std::string ReplaceAll(std::string &str, const std::string& from, const std::string& to) {
+    size_t start_pos = 0; //string처음부터 검사
+    while ((start_pos = str.find(from, start_pos)) != std::string::npos)  //from을 찾을 수 없을 때까지
+    {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // 중복검사를 피하고 from.length() > to.length()인 경우를 위해서
+    }
+    return str;
+}
 //
 
 // It makes sense only for video-Camera (not for video-File)
@@ -47,7 +107,130 @@ static enum TRACKING_STATUS g_trackingStatus = TRACKING_IDLE;
 #include "yolo_v2_class.hpp"    // imported functions from DLL
 
 
+cv::Mat avframe_to_cvmat(AVFrame *frame)
+{
 
+    AVFrame dst;
+    cv::Mat m;
+
+    memset(&dst, 0, sizeof(dst));
+
+    int w = frame->width, h = frame->height;
+    m = cv::Mat(h, w, CV_8UC3);
+    dst.data[0] = (uint8_t *)m.data;
+
+
+    avpicture_fill((AVPicture *)&dst, dst.data[0], AV_PIX_FMT_BGR24, w, h);
+
+  
+    sws_scale(m_swsctxToBGR24, frame->data, frame->linesize, 0, frame->height,
+        dst.data, dst.linesize);
+    return m;
+
+
+}
+/*
+int decode_write(AVCodecContext * avctx, AVPacket * packet, cv::Mat & srcMat)
+{
+    AVFrame *frame = NULL;// , *sw_frame = NULL;
+    AVFrame *tmp_frame = NULL;
+   // uint8_t *buffer = NULL;
+    int size;
+    int ret = 0;
+
+    ret = avcodec_send_packet(avctx, packet);
+    if (ret < 0) {
+        fprintf(stderr, "Error during decoding\n");
+        return ret;
+    }
+
+    while (1) {
+        if (!(frame = av_frame_alloc())) {
+            fprintf(stderr, "Can not alloc frame\n");
+            ret = AVERROR(ENOMEM);
+            goto fail;
+        }
+
+        ret = avcodec_receive_frame(avctx, frame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            av_frame_free(&frame);
+            //av_frame_free(&sw_frame);
+            return ret;
+        }
+        else if (ret < 0) {
+            fprintf(stderr, "Error while decoding\n");
+            goto fail;
+        }
+
+        srcMat = avframe_to_cvmat(frame);
+        
+    fail:
+        av_frame_free(&frame);
+       // av_frame_free(&sw_frame);
+        //av_freep(&buffer);
+        if (ret < 0)
+            return ret;
+    }
+}
+*/
+int decode_packet(int *got_frame, int cached)
+{
+    int ret = 0;
+    int decoded = packet.size;
+    *got_frame = 0;
+    if (packet.stream_index == video_stream_index) {
+        /* decode video frame */
+        ret = avcodec_decode_video2(video_decoder_ctx, frame, got_frame, &packet);
+        if (ret < 0) {
+            fprintf(stderr, "Error decoding video frame\n");
+            return ret;
+        }
+        if (*got_frame) {
+            //printf("video_frame%s n:%d coded_n:%d pts:%s\n",
+            //    cached ? "(cached)" : "",
+            //    video_frame_count++, frame->coded_picture_number,
+            //    av_ts2timestr(frame->pts, &video_dec_ctx->time_base));
+            ///* copy decoded frame to destination buffer:
+            // * this is required since rawvideo expects non aligned data */
+            //av_image_copy(video_dst_data, video_dst_linesize,
+            //    (const uint8_t **)(frame->data), frame->linesize,
+            //    video_dec_ctx->pix_fmt, video_dec_ctx->width, video_dec_ctx->height);
+            ///* write to rawvideo file */
+            //fwrite(video_dst_data[0], 1, video_dst_bufsize, video_dst_file);
+        }
+    }
+    else if (packet.stream_index == audio_stream_index) {
+        *got_frame = 1;
+        /* decode audio frame */
+    //    ret = avcodec_decode_audio4(audio_dec_ctx, frame, got_frame, &packet);
+    //    if (ret < 0) {
+    //        fprintf(stderr, "Error decoding audio frame\n");
+    //        return ret;
+    //    }
+    //    /* Some audio decoders decode only part of the packet, and have to be
+    //     * called again with the remainder of the packet data.
+    //     * Sample: fate-suite/lossless-audio/luckynight-partial.shn
+    //     * Also, some decoders might over-read the packet. */
+    //    decoded = FFMIN(ret, packet.size);
+    //    if (*got_frame) {
+    //        size_t unpadded_linesize = frame->nb_samples * av_get_bytes_per_sample(frame->format);
+    //        printf("audio_frame%s n:%d nb_samples:%d pts:%s\n",
+    //            cached ? "(cached)" : "",
+    //            audio_frame_count++, frame->nb_samples,
+    //            av_ts2timestr(frame->pts, &audio_dec_ctx->time_base));
+    //        /* Write the raw audio data samples of the first plane. This works
+    //         * fine for packed formats (e.g. AV_SAMPLE_FMT_S16). However,
+    //         * most audio decoders output planar audio, which uses a separate
+    //         * plane of audio samples for each channel (e.g. AV_SAMPLE_FMT_S16P).
+    //         * In other words, this code will write only the first audio channel
+    //         * in these cases.
+    //         * You should use libswresample or libavfilter to convert the frame
+    //         * to packed data. */
+    //        fwrite(frame->extended_data[0], 1, unpadded_linesize, audio_dst_file);
+    //    }
+    }
+    return decoded;
+}
 std::vector<bbox_t> ProcessTracking(cv::Mat &tempMat)
 {
     int trackingVideoWidth = tempMat.cols;
@@ -117,7 +300,7 @@ std::vector<bbox_t> ProcessTracking(cv::Mat &tempMat)
     case TRACKING_ING:
     {
         BOOL ret = update_tracking_info(tempMat, &tracking_left, &tracking_right, &tracking_top, &tracking_bottom);
-
+        
         //원본사이즈로
         float ratio_width = (float)recvWidth /(float)trackingVideoWidth;
         float ratio_height = (float)recvHeight / (float)trackingVideoHeight;
@@ -336,7 +519,13 @@ void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std
         cv::rectangle(mat_img, cv::Rect(i.x, i.y, i.w, i.h), color, 2);
         if (obj_names.size() > i.obj_id) {
             std::string obj_name = obj_names[i.obj_id];
-            if (i.track_id > 0) obj_name += " - " + std::to_string(i.track_id);
+
+#if 0
+            if (i.track_id > 0)
+                obj_name += " - " + std::to_string(i.track_id);
+#else
+           
+#endif
             cv::Size const text_size = getTextSize(obj_name, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, 2, 0);
             int max_width = (text_size.width > i.w + 2) ? text_size.width : (i.w + 2);
             max_width = std::max(max_width, (int)i.w + 2);
@@ -440,6 +629,10 @@ public:
 //메인함수
 int main(int argc, char *argv[])
 {
+    avcodec_register_all();
+    av_register_all();
+    avformat_network_init();
+
     std::string  names_file = "data/coco.names";
     std::string  cfg_file = "cfg/yolov3.cfg";
     std::string  weights_file = "yolov3.weights";
@@ -465,6 +658,28 @@ int main(int argc, char *argv[])
     //9
     bool showVideo = (argc > 8) ? std::stof(argv[8]) : true;
 
+    //10
+    string chName = (argc > 9) ? argv[9] : "NoName";
+
+    
+    g_groupNum = groupNum;
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    unsigned num_cpus = std::thread::hardware_concurrency();
+
+    cout << info.dwNumberOfProcessors << endl;
+
+    string windowName = chName + "-VideoAnalysis " + to_string(groupNum);
+    if (showVideo)
+    {
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        HWND hWnd = (HWND)cvGetWindowHandle(windowName.c_str());
+        hWnd = GetParent(hWnd);
+        //SetWindowPos( hWnd, HWND_TOPMOST, 0, 0, 500, 500, SWP_NOSIZE|SWP_NOMOVE);
+        SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 500, 500, SWP_NOMOVE);
+    }
+
+    
 
     Detector detector(cfg_file, weights_file);
 
@@ -474,7 +689,10 @@ int main(int argc, char *argv[])
     bool const send_network = true;        // true - for remote detection
     bool const use_kalman_filter = false;   // true - for stationary camera
     
-    bool detection_sync = true;             // true - for video-file
+    //bool detection_sync = true;             // true - for video-file
+    bool detection_sync = false;             // steven 수정
+    bool isFile = true;
+
 #ifdef TRACK_OPTFLOW    // for slow GPU
     detection_sync = false;
     Tracker_optflow tracker_flow;
@@ -501,7 +719,12 @@ int main(int argc, char *argv[])
 
             {
                 if (protocol == "rtsp://" || protocol == "http://" || protocol == "https:/" || filename == "zed_camera" || filename == "web_camera")
+                {
                     detection_sync = false;
+                    isFile = false;
+                }
+
+                detection_sync = false;
 
                 cv::Mat cur_frame;
                 std::atomic<int> fps_cap_counter(0), fps_det_counter(0), fps_tracking_counter(0), fps_prepare_counter(0);/*tracking*/
@@ -544,7 +767,12 @@ int main(int argc, char *argv[])
 #endif  // ZED_STEREO
 
                 cv::VideoCapture cap;
-                if (filename == "web_camera") {
+
+                if (1)
+                {
+                    //ffmpeg
+                }
+                else if (filename == "web_camera") {
                     cap.open(0);
                     cap >> cur_frame;
                 } else if (!use_zed_camera) {
@@ -556,7 +784,7 @@ int main(int argc, char *argv[])
 #else
                 video_fps = cap.get(cv::CAP_PROP_FPS);
 #endif
-                cv::Size const frame_size = cur_frame.size();
+                cv::Size frame_size = cur_frame.size();
                 //cv::Size const frame_size(cap.get(CV_CAP_PROP_FRAME_WIDTH), cap.get(CV_CAP_PROP_FRAME_HEIGHT));
                 std::cout << "\n Video size: " << frame_size << std::endl;
 
@@ -595,32 +823,221 @@ int main(int argc, char *argv[])
                     "127.0.0.1", 1473,
                     "TrackingInterfaceUdpSocket");
 
-
+             
+                
+                
+        
+                //
+                
+                
                 // capture new video-frame
-                if (t_cap.joinable()) t_cap.join();
+                //std::mutex iomutex;
+                //unsigned cpuIndex = 4;
+               
+                if (t_cap.joinable()) t_cap.join();                
                 t_cap = std::thread([&]()
                 {
                     uint64_t frame_id = 0;
                     detection_data_t detection_data;
+                    cv::Mat prev_cap_frame;
                     do {
                         detection_data = detection_data_t();
 #ifdef ZED_STEREO
                         if (use_zed_camera) {
                             while (zed.grab() !=
-        #ifdef ZED_STEREO_2_COMPAT_MODE
+#ifdef ZED_STEREO_2_COMPAT_MODE
                                 sl::SUCCESS
-        #else
+#else
                                 sl::ERROR_CODE::SUCCESS
-        #endif
+#endif
                                 ) std::this_thread::sleep_for(std::chrono::milliseconds(2));
                             detection_data.cap_frame = zed_capture_rgb(zed);
                             detection_data.zed_cloud = zed_capture_3d(zed);
                         }
                         else
 #endif   // ZED_STEREO
+
+#if 1 //FFmpeg
+                        static bool isConnection = false;
+                        if (isConnection == false)
+                        {
+                            cout << "open Video" << endl;
+#if 1//해제
+                            if (packet.buf != NULL)
+                            {   
+                                av_init_packet(&packet);
+                            }
+                            if (input_ctx != NULL)
+                            {
+                                //av_read_pause(input_ctx);
+                                avformat_close_input(&input_ctx);
+                            }
+                            
+#endif
+                            //if(avformat_open_input(&context, "rtsp://192.168.0.40/vod/mp4:sample.mp4",NULL,NULL) != 0){ 
+                            //if(avformat_open_input(&context, "rtmp://192.168.0.40/vod/sample.mp4",NULL,NULL) != 0){       
+                            //if(avformat_open_input(&context, "d:\\windows\\b.mp4",NULL,NULL) != 0){ 
+                            /* open the input file */
+                            AVDictionary *stream_opts = 0;
+                            av_dict_set(&stream_opts, "rtsp_transport", "tcp", 0);//한프로그램에서 스레드 여러개 돌리면 속도가 느려짐?
+                                                                                  //av_dict_set(&stream_opts, "rtsp_transport", "http", 0);
+                                                                                  //av_dict_set(&stream_opts, "rtsp_flags", "prefer_tcp", 0);
+                                                                                  //av_dict_set(&stream_opts, "rtsp_flags", "listen", 0);
+                                                                                  //av_dict_set(&stream_opts, "reorder_queue_size", "tcp", 0);
+
+                            av_dict_set(&stream_opts, "stimeout", "10000000", 0); // in microseconds.
+                                                                                  //av_dict_set(&stream_opts, "max_alloc ", "10000", 0);
+                            //open rtsp 
+                            if (avformat_open_input(&input_ctx, filename.c_str(), NULL, &stream_opts) != 0) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+
+                            if (avformat_find_stream_info(input_ctx, NULL) < 0) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+                                              
+                            /* find the video stream information */
+                            video_stream_index = av_find_best_stream(input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &pCodec, 0);
+                            if (video_stream_index < 0) {
+                                fprintf(stderr, "Cannot find a video stream in the input file\n");
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+
+                            audio_stream_index = av_find_best_stream(input_ctx, AVMEDIA_TYPE_AUDIO, -1, video_stream_index, &pCodec, 0);
+                            if (audio_stream_index < 0) {
+                                fprintf(stderr, "Cannot find a audio stream in the input file\n");
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                             //   continue;
+                            }
+
+                            // Get a pointer to the codec context for the video stream
+    //
+                            if (!(video_decoder_ctx = avcodec_alloc_context3(pCodec)))
+                            {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+                      
+                            AVStream* video = input_ctx->streams[video_stream_index];
+                            if (avcodec_parameters_to_context(video_decoder_ctx, video->codecpar) < 0)
+                            {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+
+
+                            // Find the decoder for the video stream
+                            pCodec = avcodec_find_decoder(video_decoder_ctx->codec_id);
+                            if (pCodec == NULL) {
+                                fprintf(stderr, "Unsupported codec!\n");
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+                            // Open codec
+                            //if(avcodec_open(pCodecCtx, pCodec)<0)
+                            if (avcodec_open2(video_decoder_ctx, pCodec, NULL) < 0)
+                            {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+
+                            if (!(frame = av_frame_alloc())) {
+                                fprintf(stderr, "Can not alloc frame\n");
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                                continue;
+                            }
+
+                            //start reading packets from stream and write them to file 
+                            //av_read_play(input_ctx);//play RTSP
+
+                            enum AVPixelFormat src_pixfmt = AV_PIX_FMT_YUV420P;
+                            enum AVPixelFormat dst_pixfmt = AV_PIX_FMT_BGR24;
+                            m_swsctxToBGR24 = sws_getContext(video_decoder_ctx->width, video_decoder_ctx->height, src_pixfmt,
+                                video_decoder_ctx->width, video_decoder_ctx->height, dst_pixfmt,
+                                SWS_FAST_BILINEAR, NULL, NULL, NULL);
+                            frame_size.width = video_decoder_ctx->width;
+                            frame_size.height = video_decoder_ctx->height;
+                            isConnection = true;
+                        }
+
+                        //프레임 읽기     
+                        int ret = 0, got_frame;
+                        static int skip_cnt = 0;
+
+                        if (isFile)
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+
+                        if ((ret = av_read_frame(input_ctx, &packet)) < 0)
+                        {
+                            //확인 필요
+                            static int failCnt = 0;
+
+                            if (failCnt > 30)
+                            {
+                                failCnt = 0;
+                                isConnection = false;
+                            }
+                            printf("av_read_frame fail \r\n");
+                            failCnt++;
+                            continue;
+                        }
+                        else
+                        {
+                            /*if (video_stream_index == packet.stream_index)
+                            {*/
+                                if (skip_cnt > 0)
+                                {
+                                    skip_cnt--;
+                                    std::cout << " skip frame " << skip_cnt << "\n";
+                                    detection_data.cap_frame = prev_cap_frame;
+                                }
+                                else
+                                {
+                                    ret = decode_packet(&got_frame, 0);
+                                    if (ret > 0 && got_frame == 1 )
+                                    {
+                                        auto start = std::chrono::steady_clock::now();
+                                    /*    if (frame->width == 0)
+                                        {
+                                            cout << "no width" << endl;
+                                        }*/
+                                        prev_cap_frame = detection_data.cap_frame = avframe_to_cvmat(frame);
+
+                                        auto end = std::chrono::steady_clock::now();
+                                        std::chrono::duration<double> spent = end - start;
+                                        int ms = spent.count() * 1000;
+                                        if (ms > 20)
+                                        {
+                                            std::cout << " Time: " << spent.count() * 1000 << " ms \n";
+                                            skip_cnt++;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        cout << "decode fail" << endl;
+                                        continue;
+                                    }
+                                }
+                            /*}
+                            else
+                            {
+                                cout << "not video" << endl;
+                            }*/
+                            av_packet_unref(&packet);
+                            
+                        }
+                        //end ffmpeg
+#else
                         {
                             cap >> detection_data.cap_frame;
                         }
+#endif
+                        //printf("capture thread cpu = %d\n", GetCurrentProcessorNumber());
                         fps_cap_counter++;
                         detection_data.frame_id = frame_id++;
                         if (detection_data.cap_frame.empty() || exit_flag) {
@@ -636,7 +1053,7 @@ int main(int argc, char *argv[])
                     } while (!detection_data.exit_flag);
                     std::cout << " t_cap exit \n";
                 });
-
+           
 
                 // pre-processing video frame (resize, convertion)
                 //비디오 프레임 전처리 과정
@@ -715,7 +1132,7 @@ int main(int argc, char *argv[])
                                 }
                             }
                             fps_tracking_counter++;
-                            
+                            //printf("tracking thread cpu = %d\n", GetCurrentProcessorNumber());
 
                             tracking_data.new_detection = true;
                             tracking_data.result_vec = result_tracking_vec;
@@ -723,6 +1140,7 @@ int main(int argc, char *argv[])
                         } while (!tracking_data.exit_flag);
                         std::cout << " t_tracking exit \n";
                     });
+            
 #endif
                 // draw rectangles (and track objects)
                 t_draw = std::thread([&]()
@@ -809,7 +1227,7 @@ int main(int argc, char *argv[])
                         draw_boxes(draw_frame, result_vec, obj_names, result_tracking_vec, current_fps_det, current_fps_cap,
                             current_fps_tracking);
 
-                        printf("current_fps_prepare = %d \r\n", (int)current_fps_prepare);
+                        //printf("current_fps_prepare = %d \r\n", (int)current_fps_prepare);
                         //show_console_result(result_vec, obj_names, detection_data.frame_id);
                         //large_preview.draw(draw_frame);
                         //small_preview.draw(draw_frame, true);
@@ -844,6 +1262,10 @@ int main(int argc, char *argv[])
 
                 // send detection to the network
                 //Json 형태로 Http Send
+                if (isFile)
+                {
+                    ReplaceAll(filename, "\\", "\\\\");                          
+                }
                 t_network = std::thread([&]()
                 {
                     if (send_network) {
@@ -851,6 +1273,7 @@ int main(int argc, char *argv[])
                         do {
                             detection_data = draw2net.receive();
 
+              
                             detector.send_json_http(detection_data.result_vec, obj_names, detection_data.frame_id, filename, 400000, jsonPort);
 
                         } while (!detection_data.exit_flag);
@@ -858,6 +1281,28 @@ int main(int argc, char *argv[])
                     std::cout << " t_network exit \n";
                 });
 
+                // std::thread t_cap, t_prepare, t_detect, t_tracking/*tracking*/, t_post, t_draw, t_write, t_network;
+                //INT32 Affinity;
+                //int priority;
+                //SetThreadAffinityMask(t_cap.native_handle(), 1);//
+                SetThreadPriority(t_cap.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+                //SetThreadAffinityMask(t_prepare.native_handle(), 2);//2
+                //SetThreadPriority(t_prepare.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+                //SetThreadAffinityMask(t_detect.native_handle(), 4);//3
+                //SetThreadPriority(t_detect.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+                //SetThreadAffinityMask(t_tracking.native_handle(), 8);//4
+                //SetThreadPriority(t_tracking.native_handle(), THREAD_PRIORITY_LOWEST);
+
+                //SetThreadAffinityMask(t_draw.native_handle(), 16);//5
+                //SetThreadPriority(t_draw.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+                //SetThreadAffinityMask(t_network.native_handle(), 32);//6
+                //SetThreadPriority(t_network.native_handle(), THREAD_PRIORITY_TIME_CRITICAL);
+
+                //priority = GetThreadPriority(t_cap.native_handle());
 
                 // show detection
                 detection_data_t detection_data;
@@ -885,7 +1330,8 @@ int main(int argc, char *argv[])
                     //    cv::putText(draw_frame, "extrapolate", cv::Point2f(10, 40), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(50, 50, 0), 2);
                     //}
 
-                    cv::imshow("window name", draw_frame);
+                    if(showVideo)
+                        cv::imshow(windowName, draw_frame);
                     int key = cv::waitKey(3);    // 3 or 16ms
                     if (key == 'f') show_small_boxes = !show_small_boxes;
                     if (key == 'p') while (true) if (cv::waitKey(100) == 'p') break;
@@ -896,7 +1342,7 @@ int main(int argc, char *argv[])
                 } while (!detection_data.exit_flag);
                 std::cout << " show detection exit \n";
 
-                cv::destroyWindow("window name");
+                cv::destroyWindow(windowName);
                 // wait for all threads
                 if (t_cap.joinable()) t_cap.join();
                 if (t_prepare.joinable()) t_prepare.join();
@@ -938,7 +1384,9 @@ int main(int argc, char *argv[])
 
                 //result_vec = detector.tracking_id(result_vec);    // comment it - if track_id is not required
                 draw_boxes(mat_img, result_vec, obj_names, result_tracking_vec);
-                cv::imshow("window name", mat_img);
+
+                if (showVideo)
+                    cv::imshow(windowName, mat_img);
                 show_console_result(result_vec, obj_names);
                 cv::waitKey(0);
             }

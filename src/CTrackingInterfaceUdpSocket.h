@@ -6,6 +6,9 @@
 
 #pragma comment(lib, "ws2_32.lib")
 #include <WinSock2.h>
+#include <sstream>
+#include <string>
+#include <vector>
 #include <iostream>
 #include <queue>
 using namespace std;

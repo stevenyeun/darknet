@@ -128,6 +128,26 @@ public:
         return mat_to_image(det_mat);
     }
 
+	//tracking
+	std::shared_ptr<image_t> mat_to_image_resize_byValue(cv::Mat mat, int toWidth) const
+	{
+		if (mat.data == NULL) return std::shared_ptr<image_t>(NULL);
+
+		//원본 해상도 비율로 계산
+		float ratioWidth = (float)toWidth / (float)mat.cols;
+		int resizedHeight = mat.rows * ratioWidth;
+
+		cv::Size size = cv::Size(toWidth, resizedHeight);
+		cv::Mat det_mat;
+		if (mat.size() != size)
+			cv::resize(mat, det_mat, size);
+		else
+			det_mat = mat;  // only reference is copied
+
+		return mat_to_image(det_mat);
+	}
+	
+
     static std::shared_ptr<image_t> mat_to_image(cv::Mat img_src)
     {
         cv::Mat img;
@@ -139,6 +159,8 @@ public:
         *image_ptr = mat_to_image_custom(img);
         return image_ptr;
     }
+
+	
 
 private:
 
@@ -196,6 +218,9 @@ public:
         send_str = tmp_buf;
         free(tmp_buf);
 
+		int cnt = 1;
+		int totalSize = cur_bbox_vec.size();
+
         for (auto & i : cur_bbox_vec) {
             char *buf = (char *)calloc(2048, sizeof(char));
 
@@ -211,11 +236,22 @@ public:
                 sprintf(buf, "\n    , \"coordinates_in_meters\":{\"x_3d\":%.2f, \"y_3d\":%.2f, \"z_3d\":%.2f}",
                     i.x_3d, i.y_3d, i.z_3d);
                 send_str += buf;
-            }
+			}
 
-            send_str += "}\n";
 
-            free(buf);
+			if (cnt == totalSize)
+			{
+				send_str += "}\n";
+			}
+			else
+			{
+				send_str += "},\n";
+			}
+
+
+			cnt++;
+
+			free(buf);
         }
 
         //send_str +=  "\n ] \n}, \n";
@@ -228,6 +264,140 @@ public:
 // --------------------------------------------------------------------------------
 
 
+#if 1//opencv tracknig 사용을 위해 추가 StevenYeun
+#include <opencv2/tracking.hpp>
+cv::Ptr<cv::Tracker> tracker;//opencv Tracker
+std::string trackerType = "";
+
+// List of tracker types in OpenCV 3.4.1
+std::string trackerTypes[8] = { "BOOSTING", "MIL", "KCF", "TLD","MEDIANFLOW", "GOTURN", "MOSSE", "CSRT" };
+int init_tracker(cv::Mat mat_img, int left, int right, int top, int bottom)
+{
+	if (tracker != NULL)
+		tracker->clear();
+
+
+	// vector <string> trackerTypes(types, std::end(types));
+
+// Create a tracker
+	trackerType = trackerTypes[7];
+	printf("trackerType : %s \r\n", trackerType);
+
+#if (CV_MINOR_VERSION < 3)
+	{
+		tracker = Tracker::create(trackerType);
+	}
+#else
+	{
+		if (trackerType == "BOOSTING")//0
+			tracker = cv::TrackerBoosting::create();
+		if (trackerType == "MIL")//1
+			tracker = cv::TrackerMIL::create();
+		if (trackerType == "KCF")//2
+			tracker = cv::TrackerKCF::create();
+		if (trackerType == "TLD")//3
+			tracker = cv::TrackerTLD::create();
+		if (trackerType == "MEDIANFLOW")//4
+			tracker = cv::TrackerMedianFlow::create();
+		if (trackerType == "GOTURN")//5
+			tracker = cv::TrackerGOTURN::create();
+		if (trackerType == "MOSSE")//6
+			tracker = cv::TrackerMOSSE::create();
+		if (trackerType == "CSRT")//7
+			tracker = cv::TrackerCSRT::create();
+	}
+#endif
+
+
+
+	// Define initial bounding box
+	//좌표 변환
+	int x = left + ((right - left) / 2);
+	int y = top + ((bottom - top) / 2);
+	int width = (right - left);
+	int height = (bottom - top);
+
+	cv::Rect2d bbox(x, y, width, height);
+	/*cv::Mat temp = image_to_mat(frame);*/
+
+	bool ret = tracker->init(mat_img, bbox);
+
+	if (ret == true)
+	{
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+int update_tracking_info(cv::Mat mat_img, int * left, int * right, int * top, int * bottom)
+{
+	bool ret = false;
+
+	//cv::Mat temp = image_to_mat(frame);
+	cv::Rect2d bbox;
+	ret = tracker->update(mat_img, bbox);
+
+	if (ret == true)
+	{
+		*left = bbox.x - (bbox.width / 2);
+		*right = bbox.x + (bbox.width / 2);
+
+		*top = bbox.y - (bbox.height / 2);
+		*bottom = bbox.y + (bbox.height / 2);
+
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+cv::Mat image_to_mat(image_t img)
+{
+	int channels = img.c;
+	int width = img.w;
+	int height = img.h;
+	cv::Mat mat = cv::Mat(height, width, CV_8UC(channels));
+	int step = mat.step;
+
+	for (int y = 0; y < img.h; ++y) {
+		for (int x = 0; x < img.w; ++x) {
+			for (int c = 0; c < img.c; ++c) {
+				float val = img.data[c*img.h*img.w + y * img.w + x];
+				mat.data[y*step + x * img.c + c] = (unsigned char)(val * 255);
+			}
+		}
+	}
+	return mat;
+}
+#endif
+
+//class Util
+//{
+//	//tracking
+//	static std::shared_ptr<image_t> get_height_byWidth(cv::Mat mat, int toWidth)
+//	{
+//		if (mat.data == NULL)
+//			return 0;
+//
+//		//원본 해상도 비율로 계산
+//		float ratioWidth = (float)toWidth / (float)mat.cols;
+//		int resizedHeight = mat.rows * ratioWidth;
+//
+//		cv::Size size = cv::Size(toWidth, resizedHeight);
+//		cv::Mat det_mat;
+//		if (mat.size() != size)
+//			cv::resize(mat, det_mat, size);
+//		else
+//			det_mat = mat;  // only reference is copied
+//
+//		return 0;
+//	}
+//}
 #if defined(TRACK_OPTFLOW) && defined(OPENCV) && defined(GPU)
 
 #include <opencv2/cudaoptflow.hpp>
