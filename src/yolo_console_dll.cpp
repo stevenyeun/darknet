@@ -628,40 +628,49 @@ public:
 
 //메인함수
 int main(int argc, char *argv[])
-{
+{   
+    std::string  names_file = "data/coco.names";    
+    std::string  cfg_file = "cfg/yolov3.cfg";    
+    std::string  weights_file = "yolov3.weights";
+    std::string filename;  
+
+    if (argc > 4) {    //voc.names yolo-voc.cfg yolo-voc.weights test.mp4
+        names_file = argv[1];//1
+        cfg_file = argv[2];//2
+        weights_file = argv[3];//3
+        filename = argv[4];//4
+    }
+    else if (argc > 1) filename = argv[1];
+
+    //5
+    float const thresh = (argc > 5) ? std::stof(argv[5]) : 0.2;
+
+    //6
+    int groupNum = (argc > 6) ? std::stof(argv[6]) : 1;
+
+    //7
+    int jsonPort = (argc > 7) ? std::stof(argv[7]) : 1011;
+
+    //8
+    bool showVideo = (argc > 8) ? std::stof(argv[8]) : true;
+
+    //9
+    string chName = (argc > 9) ? argv[9] : "NoName";
+
+    //10
+    bool showConsoleWindow = (argc > 10) ? std::stof(argv[10]) : false;
+
+    if (showConsoleWindow == false)
+        ::ShowWindow(GetConsoleWindow(), SW_HIDE);
+
+    printf("nameFile=%s, cfgFile=%s, weightsFile=%s, videoFile=%s, thresh=%lf, groupNum=%d, jsonPort=%d, showVieo=%d, chName=%s, showConsoleWindow=%d \r\n",
+        names_file, cfg_file, weights_file, filename,
+        thresh, groupNum, jsonPort, showVideo, chName, showConsoleWindow);
+
     avcodec_register_all();
     av_register_all();
     avformat_network_init();
 
-    std::string  names_file = "data/coco.names";
-    std::string  cfg_file = "cfg/yolov3.cfg";
-    std::string  weights_file = "yolov3.weights";
-    std::string filename;
-    
-
-    if (argc > 4) {    //voc.names yolo-voc.cfg yolo-voc.weights test.mp4
-        names_file = argv[1];
-        cfg_file = argv[2];
-        weights_file = argv[3];
-        filename = argv[4];
-    }
-    else if (argc > 1) filename = argv[1];
-
-    float const thresh = (argc > 5) ? std::stof(argv[5]) : 0.2;
-
-    //7
-    int groupNum = (argc > 6) ? std::stof(argv[6]) : 1;
-
-    //8
-    int jsonPort = (argc > 7) ? std::stof(argv[7]) : 1011;
-
-    //9
-    bool showVideo = (argc > 8) ? std::stof(argv[8]) : true;
-
-    //10
-    string chName = (argc > 9) ? argv[9] : "NoName";
-
-    
     g_groupNum = groupNum;
     SYSTEM_INFO info;
     GetSystemInfo(&info);
@@ -677,9 +686,7 @@ int main(int argc, char *argv[])
         hWnd = GetParent(hWnd);
         //SetWindowPos( hWnd, HWND_TOPMOST, 0, 0, 500, 500, SWP_NOSIZE|SWP_NOMOVE);
         SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 500, 500, SWP_NOMOVE);
-    }
-
-    
+    }    
 
     Detector detector(cfg_file, weights_file);
 
