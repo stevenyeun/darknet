@@ -1007,12 +1007,8 @@ int main(int argc, char *argv[])
                                 {
                                     ret = decode_packet(&got_frame, 0);
                                     if (ret > 0 && got_frame == 1 )
-                                    {
-                                        auto start = std::chrono::steady_clock::now();
-                                    /*    if (frame->width == 0)
-                                        {
-                                            cout << "no width" << endl;
-                                        }*/
+                                    {                                        
+                                        auto start = std::chrono::steady_clock::now();                                    
                                         prev_cap_frame = detection_data.cap_frame = avframe_to_cvmat(frame);
 
                                         auto end = std::chrono::steady_clock::now();
