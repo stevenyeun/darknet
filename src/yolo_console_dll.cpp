@@ -10,6 +10,9 @@
 #include <atomic>
 #include <mutex>         // std::mutex, std::unique_lock
 #include <cmath>
+#include <iostream>
+
+#include "MacAddr.h"
 
 
 
@@ -353,6 +356,9 @@ std::vector<bbox_t> ProcessTracking(cv::Mat &tempMat)
 }
 
 
+
+
+
 #ifdef OPENCV
 #ifdef ZED_STEREO
 #include <sl/Camera.hpp>
@@ -628,7 +634,32 @@ public:
 
 //메인함수
 int main(int argc, char *argv[])
-{   
+{
+    bool authSuccess = false;
+    vector<string> macAddrss = getMacAddress();
+    for (int i = 0; i < macAddrss.size(); i++)
+    {
+        //00-01-29-9C-4C-E8
+        //0001299C4CE8
+        if ( macAddrss[i] == "0001299C4CE8" )//myHomeAiCom
+        {
+            authSuccess = true;
+        }
+        //00-01-29-9C-4C-E6
+        //0001299C4CE6
+        if (macAddrss[i] == "0001299C4CE6")//u2 ai com
+        {
+            authSuccess = true;
+        }
+    }
+
+    if (authSuccess == false)
+    {
+        cout << "No Authorization" << endl;
+        Sleep(10000);
+        exit(1);
+    }
+
     std::string  names_file = "data/coco.names";    
     std::string  cfg_file = "cfg/yolov3.cfg";    
     std::string  weights_file = "yolov3.weights";

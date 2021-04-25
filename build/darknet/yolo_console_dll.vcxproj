@@ -132,6 +132,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\CTrackingInterfaceUdpSocket.cpp" />
+    <ClCompile Include="..\..\src\MacAddr.cpp" />
     <ClCompile Include="..\..\src\yolo_console_dll.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -140,6 +141,7 @@
   <ItemGroup>
     <ClInclude Include="..\..\include\yolo_v2_class.hpp" />
     <ClInclude Include="..\..\src\CTrackingInterfaceUdpSocket.h" />
+    <ClInclude Include="..\..\src\MacAddr.h" />
     <ClInclude Include="..\..\src\yolo_console_dll.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
